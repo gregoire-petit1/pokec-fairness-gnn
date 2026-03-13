@@ -14,6 +14,8 @@ class GraphSAGE(torch.nn.Module):
         num_layers: int = 2,
         dropout: float = 0.5,
     ) -> None:
+        if num_layers < 2:
+            raise ValueError("num_layers must be >= 2")
         super().__init__()
         self.dropout = dropout
         self.convs = torch.nn.ModuleList()
@@ -31,7 +33,12 @@ class GraphSAGE(torch.nn.Module):
 
     def get_embeddings(self, x: torch.Tensor, edge_index: torch.Tensor) -> torch.Tensor:
         """Return penultimate layer embeddings (before final classification layer)."""
-        for conv in self.convs[:-1]:
-            x = conv(x, edge_index)
-            x = F.relu(x)
+        was_training = self.training
+        self.eval()
+        with torch.no_grad():
+            for conv in self.convs[:-1]:
+                x = conv(x, edge_index)
+                x = F.relu(x)
+        if was_training:
+            self.train()
         return x

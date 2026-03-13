@@ -3,11 +3,12 @@
 import torch
 import torch.nn.functional as F
 from sklearn.metrics import f1_score
+from torch_geometric.data import Data
 
 
 def train_epoch(
     model: torch.nn.Module,
-    data,
+    data: Data,
     optimizer: torch.optim.Optimizer,
     train_mask: torch.Tensor,
 ) -> float:
@@ -24,7 +25,7 @@ def train_epoch(
 @torch.no_grad()
 def evaluate(
     model: torch.nn.Module,
-    data,
+    data: Data,
     mask: torch.Tensor,
 ) -> tuple[float, float]:
     """Evaluate model on masked nodes. Returns (accuracy, f1_macro)."""
@@ -40,7 +41,7 @@ def evaluate(
 
 def train(
     model: torch.nn.Module,
-    data,
+    data: Data,
     train_mask: torch.Tensor,
     val_mask: torch.Tensor,
     lr: float,
@@ -53,7 +54,7 @@ def train(
         best_val_f1: best validation F1 achieved
         history: list of dicts with epoch, loss, val_f1
     """
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=5e-4)
     best_val_f1 = 0.0
     best_state = None
     patience_counter = 0
