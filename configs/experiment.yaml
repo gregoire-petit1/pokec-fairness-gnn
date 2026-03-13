@@ -1,0 +1,25 @@
+seed: 42
+
+data:
+  dataset: pokec-z
+  raw_dir: data/raw/pokec-z
+  splits_dir: data/splits
+  split_ratios: [0.6, 0.2, 0.2]
+  target_col: region
+  sensitive_cols: [gender, age_group]
+
+model:
+  hidden_dim: 256
+  num_layers: 2
+  dropout: 0.5
+  lr: 0.001
+  epochs: 200
+  patience: 20
+
+fairgnn:
+  lambda_values: [0.1, 0.5, 1.0, 5.0]
+  adv_hidden_dim: 64
+
+robustness:
+  noise_levels: [0.1, 0.3, 0.5]
+  edge_drop_rates: [0.1, 0.3, 0.5]
