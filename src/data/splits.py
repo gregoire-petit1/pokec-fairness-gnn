@@ -14,6 +14,7 @@ def make_splits(
     seed: int = 42,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Return train/val/test index tensors, stratified on y x sensitive."""
+    assert abs(sum(ratios) - 1.0) < 1e-9, f"ratios must sum to 1.0, got {sum(ratios)}"
     # Combined stratification label
     # Use .tolist() -> np.array() to avoid torch/numpy ABI compatibility issues
     strat = np.array(y.tolist()) * 10 + np.array(sensitive.tolist())
@@ -49,7 +50,7 @@ def save_splits(train: torch.Tensor, val: torch.Tensor, test: torch.Tensor, out_
 
 def load_splits(out_dir: str) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Load split index tensors from disk."""
-    train = torch.load(os.path.join(out_dir, "train.pt"))
-    val = torch.load(os.path.join(out_dir, "val.pt"))
-    test = torch.load(os.path.join(out_dir, "test.pt"))
+    train = torch.load(os.path.join(out_dir, "train.pt"), weights_only=True)
+    val = torch.load(os.path.join(out_dir, "val.pt"), weights_only=True)
+    test = torch.load(os.path.join(out_dir, "test.pt"), weights_only=True)
     return train, val, test
