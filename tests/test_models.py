@@ -32,3 +32,14 @@ def test_trainer_evaluate_returns_acc_f1():
     acc, f1 = evaluate(model, data, mask)
     assert 0.0 <= acc <= 1.0
     assert 0.0 <= f1 <= 1.0
+
+
+def test_fairgnn_forward_returns_pred_and_adv():
+    from src.models.fairgnn import FairGNN
+
+    x = torch.randn(100, 16)
+    edge_index = torch.randint(0, 100, (2, 300))
+    model = FairGNN(in_channels=16, hidden_channels=32, out_channels=2, adv_hidden=16)
+    pred_logits, adv_logits = model(x, edge_index)
+    assert pred_logits.shape == (100, 2)
+    assert adv_logits.shape[0] == 100
