@@ -11,7 +11,7 @@ def categorize_age(ages: pd.Series) -> pd.Series:
     Bins:
     - young  : [0,  25)
     - adult  : [25, 40)
-    - senior : [40, 200)
+    - senior : [40, inf)
 
     Args:
         ages: A :class:`pandas.Series` of numeric age values.
@@ -19,7 +19,7 @@ def categorize_age(ages: pd.Series) -> pd.Series:
     Returns:
         A :class:`pandas.Categorical` Series with string labels.
     """
-    bins = [0, 25, 40, 200]
+    bins = [0, 25, 40, float("inf")]
     labels = ["young", "adult", "senior"]
     return pd.cut(ages, bins=bins, labels=labels, right=False)
 
