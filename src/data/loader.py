@@ -16,7 +16,7 @@ def load_pokec_z(raw_dir: str) -> Data:
 
     Returns:
         A :class:`torch_geometric.data.Data` object with attributes:
-        - ``x``: float feature matrix (all columns except ``user_id``)
+        - ``x``: float feature matrix (all columns except ``user_id`` and ``region``)
         - ``edge_index``: long tensor of shape ``[2, num_edges]``
         - ``y``: long tensor of binary region labels
         - ``feature_cols``: list of column names corresponding to ``x``
@@ -32,15 +32,16 @@ def load_pokec_z(raw_dir: str) -> Data:
     edges = pd.read_csv(edges_path, sep="\t", header=None, names=["src", "dst"])
     # Remap node ids to 0-indexed
     node_ids = {nid: idx for idx, nid in enumerate(df["user_id"].values)}
-    src = edges["src"].map(node_ids).dropna().astype(int).values
-    dst = edges["dst"].map(node_ids).dropna().astype(int).values
+    edges = edges[edges["src"].isin(node_ids) & edges["dst"].isin(node_ids)].copy()
+    src = edges["src"].map(node_ids).astype(int).values
+    dst = edges["dst"].map(node_ids).astype(int).values
     edge_index = torch.tensor([src, dst], dtype=torch.long)
 
     # Labels: region (0 or 1 in pokec-z)
     y = torch.tensor(df["region"].values, dtype=torch.long)
 
     # All columns as features (will be filtered in preprocessing)
-    feature_cols = [c for c in df.columns if c not in ["user_id"]]
+    feature_cols = [c for c in df.columns if c not in ["user_id", "region"]]
     x = torch.tensor(df[feature_cols].values, dtype=torch.float)
 
     data = Data(x=x, edge_index=edge_index, y=y)
