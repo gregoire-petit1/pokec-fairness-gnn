@@ -58,4 +58,7 @@ def test_splits_no_overlap():
     y = torch.randint(0, 2, (n,))
     gender = torch.randint(0, 2, (n,))
     train, val, test = make_splits(n, y, gender, ratios=(0.6, 0.2, 0.2), seed=42)
-    assert len(set(train.tolist()) & set(test.tolist())) == 0
+    train_set, val_set, test_set = set(train.tolist()), set(val.tolist()), set(test.tolist())
+    assert len(train_set & val_set) == 0
+    assert len(train_set & test_set) == 0
+    assert len(val_set & test_set) == 0
