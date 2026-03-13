@@ -34,3 +34,28 @@ def test_age_group_categorization():
     ages = pd.Series([20, 30, 50])
     groups = categorize_age(ages)
     assert list(groups) == ["young", "adult", "senior"]
+
+
+from src.data.splits import make_splits
+
+
+def test_splits_sizes():
+    import torch
+
+    n = 1000
+    y = torch.randint(0, 2, (n,))
+    gender = torch.randint(0, 2, (n,))
+    train, val, test = make_splits(n, y, gender, ratios=(0.6, 0.2, 0.2), seed=42)
+    assert abs(len(train) / n - 0.6) < 0.02
+    assert abs(len(val) / n - 0.2) < 0.02
+    assert abs(len(test) / n - 0.2) < 0.02
+
+
+def test_splits_no_overlap():
+    import torch
+
+    n = 1000
+    y = torch.randint(0, 2, (n,))
+    gender = torch.randint(0, 2, (n,))
+    train, val, test = make_splits(n, y, gender, ratios=(0.6, 0.2, 0.2), seed=42)
+    assert len(set(train.tolist()) & set(test.tolist())) == 0
