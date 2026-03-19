@@ -36,6 +36,9 @@ def equal_opportunity_diff(
 def group_auc_gap(proba: np.ndarray, y_true: torch.Tensor, sensitive: torch.Tensor) -> float:
     """Max AUC difference across sensitive groups."""
     groups = sensitive.unique().tolist()
+    # For binary classification, use P(y=1) only; for multiclass use full proba matrix.
+    n_classes = proba.shape[1] if proba.ndim == 2 else 1
+    is_binary = n_classes == 2
     aucs = []
     for g in groups:
         mask = sensitive == g
@@ -43,7 +46,12 @@ def group_auc_gap(proba: np.ndarray, y_true: torch.Tensor, sensitive: torch.Tens
         p_g = proba[mask.tolist()]
         if len(set(y_g)) < 2:
             continue
-        aucs.append(roc_auc_score(y_g, p_g, multi_class="ovr", average="macro"))
+        if is_binary:
+            # sklearn expects 1D scores for binary case
+            auc = roc_auc_score(y_g, p_g[:, 1])
+        else:
+            auc = roc_auc_score(y_g, p_g, multi_class="ovr", average="macro")
+        aucs.append(auc)
     if len(aucs) < 2:
         return 0.0
     return float(max(aucs) - min(aucs))
