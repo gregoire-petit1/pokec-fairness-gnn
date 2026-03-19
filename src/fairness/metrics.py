@@ -1,8 +1,9 @@
-"""Fairness metrics: ΔDP, ΔEO, Group AUC gap."""
+"""Fairness metrics: ΔDP, ΔEO, Group AUC gap, Sensitive Attribute Leakage."""
 
 import torch
 import numpy as np
 from sklearn.metrics import roc_auc_score
+from sklearn.linear_model import LogisticRegression
 
 
 def demographic_parity_diff(pred: torch.Tensor, sensitive: torch.Tensor) -> float:
@@ -39,13 +40,45 @@ def group_auc_gap(proba: np.ndarray, y_true: torch.Tensor, sensitive: torch.Tens
     for g in groups:
         mask = sensitive == g
         y_g = y_true[mask].tolist()
-        p_g = proba[mask.numpy()]
+        p_g = proba[mask.tolist()]
         if len(set(y_g)) < 2:
             continue
         aucs.append(roc_auc_score(y_g, p_g, multi_class="ovr", average="macro"))
     if len(aucs) < 2:
         return 0.0
     return float(max(aucs) - min(aucs))
+
+
+def sensitive_leakage(
+    embeddings: torch.Tensor,
+    sensitive: torch.Tensor,
+    seed: int = 42,
+) -> float:
+    """Sensitive attribute leakage via logistic regression probe.
+
+    Train a logistic regression classifier on frozen node embeddings to predict
+    the sensitive attribute.  A high accuracy indicates that the sensitive
+    attribute is encoded in the representation (high leakage); accuracy near the
+    majority-class baseline indicates minimal leakage.
+
+    This metric is widely used in the FairGNN / NIFTY literature to measure how
+    much demographic information is captured by learned embeddings.
+
+    Args:
+        embeddings: Node embedding matrix of shape ``[N, d]``.
+        sensitive: Binary sensitive attribute tensor of shape ``[N]``.
+        seed: Random seed for the logistic regression solver.
+
+    Returns:
+        Classification accuracy of the probe classifier (float in [0, 1]).
+    """
+    X = embeddings.detach().cpu().tolist()
+    y = sensitive.cpu().tolist()
+    clf = LogisticRegression(max_iter=1000, random_state=seed)
+    clf.fit(X, y)
+    preds = clf.predict(X)
+    accuracy = float(np.mean(np.array(preds) == np.array(y)))
+    return accuracy
 
 
 def compute_all_fairness_metrics(

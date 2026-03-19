@@ -21,9 +21,10 @@ def test_load_returns_pyg_data():
 @_requires_data
 def test_sensitive_attrs_not_in_features():
     data = load_pokec_z("data/raw/pokec-z")
-    processed = preprocess(data, sensitive_cols=["gender", "age_group"])
-    assert processed.x.shape[1] < data.x.shape[1]
-    for col in ["gender"]:
+    original_num_features = data.x.shape[1]
+    processed = preprocess(data, sensitive_cols=["gender", "region"])
+    assert processed.x.shape[1] < original_num_features
+    for col in ["gender", "region"]:
         assert col not in processed.feature_cols
 
 
