@@ -41,24 +41,34 @@ def test_oversample_increases_minority():
 
 
 def test_sensitive_leakage_perfect():
-    """When embeddings perfectly encode the sensitive attribute, leakage should be 1.0."""
+    """When embeddings perfectly encode the sensitive attribute, AUC should be 1.0."""
     torch.manual_seed(42)
-    n = 100
-    sensitive = torch.randint(0, 2, (n,))
+    n = 200
+    # Interleave 0/1 so both classes appear in train and test
+    sensitive = torch.tensor([i % 2 for i in range(n)])
     # Embeddings = one-hot of sensitive attribute → perfect prediction
     embeddings = torch.zeros(n, 2)
     embeddings[sensitive == 0, 0] = 1.0
     embeddings[sensitive == 1, 1] = 1.0
-    acc = sensitive_leakage(embeddings, sensitive, seed=42)
-    assert acc == 1.0
+    train_mask = torch.zeros(n, dtype=torch.bool)
+    test_mask = torch.zeros(n, dtype=torch.bool)
+    train_mask[:140] = True
+    test_mask[140:] = True
+    auc = sensitive_leakage(embeddings, sensitive, train_mask, test_mask, seed=42)
+    assert auc == 1.0
 
 
 def test_sensitive_leakage_random():
-    """When embeddings are random (uninformative), leakage should be near majority baseline."""
+    """When embeddings are random (uninformative), AUC should be near 0.5."""
     torch.manual_seed(42)
-    n = 200
-    sensitive = torch.cat([torch.zeros(100), torch.ones(100)]).long()
-    embeddings = torch.randn(n, 4)
-    acc = sensitive_leakage(embeddings, sensitive, seed=42)
-    # Majority baseline is 0.5 for balanced classes; allow up to 0.75 for small random datasets
-    assert acc <= 0.75
+    n = 400
+    # Interleave 0/1 so both classes appear in train and test
+    sensitive = torch.tensor([i % 2 for i in range(n)])
+    embeddings = torch.randn(n, 8)
+    train_mask = torch.zeros(n, dtype=torch.bool)
+    test_mask = torch.zeros(n, dtype=torch.bool)
+    train_mask[:280] = True
+    test_mask[280:] = True
+    auc = sensitive_leakage(embeddings, sensitive, train_mask, test_mask, seed=42)
+    # AUC near 0.5 for random embeddings; allow 0.15 margin around chance
+    assert 0.4 <= auc <= 0.65
