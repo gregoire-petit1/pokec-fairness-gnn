@@ -65,14 +65,21 @@ Before the main experiment, a sweep of 8 candidate targets × 5 seeds = 40 runs 
 
 ### Main Experiment Results
 
-*Note: the table below will be filled after running `notebooks/main_experiment.ipynb` with the Pokec-z raw data.*
+Results from `notebooks/main_experiment.ipynb` executed on GPU (RTX 3090). Baseline reported as mean ± std over 5 seeds `[3, 7, 21, 42, 99]`; other methods use seed=42.
 
-| Method | Macro F1 (mean±std) | ΔDP ↓ (mean±std) | ΔEO ↓ | Leakage AUC ↓ | CF unfairness ↓ |
-|--------|---------------------|------------------|-------|----------------|-----------------|
-| Baseline (GraphSAGE) | ~0.939 ± 0.002 | ~0.037 ± 0.004 | ~0.018 | ~0.750 | — |
-| Pre-processing (Resampling) | — | — | — | — | — |
-| Pre-processing (FairDrop) | — | — | — | — | — |
-| FairGNN (best λ) | — | — | — | — | — |
+| Method | Accuracy | Macro F1 (mean±std) | ΔDP ↓ (mean±std) | ΔEO ↓ | Leakage AUC ↓ |
+|--------|----------|---------------------|------------------|-------|----------------|
+| Baseline (GraphSAGE) | 0.9381 ± 0.0012 | 0.9380 ± 0.0011 | 0.0414 ± 0.0011 | 0.0221 | 0.8171 ± 0.0051 |
+| Pre-processing (Resampling) | 0.9381 | 0.9380 | 0.0553 | 0.0365 | n/a |
+| Pre-processing (FairDrop) | 0.9353 | 0.9351 | 0.0380 | 0.0206 | 0.8779 |
+| FairGNN (best λ) | 0.8272 | 0.8272 | 0.0137 | 0.0083 | n/a |
+
+**Key observations:**
+- **Resampling** preserves accuracy exactly (same as baseline) but *increases* ΔDP (+34%) and ΔEO (+65%) — label/gender correlations in the graph structure overwhelm the balancing effect, and the method does not constrain the embedding space
+- **FairDrop** achieves a modest accuracy drop (−0.28 pp) with a 8% ΔDP reduction and 6.8% ΔEO reduction; leakage actually increases slightly (0.817 → 0.878), suggesting FairDrop's structural pruning may redistribute rather than eliminate gender-correlated structure in embeddings on this highly homophilic graph
+- **FairGNN** achieves the best fairness: ΔDP −67% (0.0414 → 0.0137), ΔEO −62% (0.0221 → 0.0083), at a cost of −10.9 pp in F1 (0.938 → 0.827); the adversarial debiasing effectively constrains the representation space
+
+See `results/figures/pareto_fairness.png` for the fairness–accuracy Pareto plot and `results/figures/counterfactual_fairness.png` for CF scores (baseline and FairDrop).
 
 ### Structural Bias
 
@@ -80,8 +87,10 @@ The **assortative mixing coefficient r** (Newman 2003), as described in Laclau e
 
 | Sensitive attribute | r |
 |---|---|
-| gender | — |
-| region | ≈ 0.87 (reported in Laclau et al., 2024) |
+| gender | ~0.08 (low — users connect cross-gender frequently) |
+| region | ≈ 0.87 (reported in Laclau et al., 2024 — strong homophily) |
+
+> **Note**: The leakage AUC of ~0.82 despite low gender homophily (r≈0.08) indicates that region homophily (r≈0.87) is the dominant structural bias channel — region and gender are correlated in the dataset, so even gender-debiased edges still propagate region-related signals.
 
 A high r explains why GNN embeddings encode sensitive information even when it is removed from node features: message passing propagates demographic signals through the edge structure.
 
