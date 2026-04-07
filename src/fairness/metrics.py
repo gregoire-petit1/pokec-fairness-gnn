@@ -14,6 +14,12 @@ from sklearn.metrics import roc_auc_score
 from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import train_test_split
 from sklearn.utils import resample
+from threadpoolctl import threadpool_limits
+
+# Limit BLAS/OpenMP threads for sklearn probes to avoid saturating all CPU cores.
+# The logistic regression probes (leakage, counterfactual) are I/O-bound,
+# not compute-bound — extra threads past 4 add contention with no speedup.
+_PROBE_N_THREADS = 4
 
 
 def demographic_parity_diff(pred: torch.Tensor, sensitive: torch.Tensor) -> float:
@@ -122,10 +128,9 @@ def sensitive_leakage(
     y_train_bal = y_train[balanced_idx]
 
     clf = LogisticRegression(max_iter=1000, random_state=seed)
-    clf.fit(X_train_bal, y_train_bal)
-
-    # AUC-ROC on the test set (threshold-independent, robust to imbalance)
-    proba_test = clf.predict_proba(X_test)[:, 1]
+    with threadpool_limits(limits=_PROBE_N_THREADS):
+        clf.fit(X_train_bal, y_train_bal)
+        proba_test = clf.predict_proba(X_test)[:, 1]
     auc = roc_auc_score(y_test, proba_test)
     return float(auc)
 
@@ -247,10 +252,10 @@ def counterfactual_fairness_score(
     test_idx = np.where(np.array(test_mask.cpu().tolist()))[0]
 
     clf = LogisticRegression(max_iter=1000, class_weight="balanced", random_state=seed)
-    clf.fit(Z_aug[train_idx], y[train_idx])
-
-    pred_orig = clf.predict(Z_aug[test_idx])
-    pred_flip = clf.predict(Z_flip[test_idx])
+    with threadpool_limits(limits=_PROBE_N_THREADS):
+        clf.fit(Z_aug[train_idx], y[train_idx])
+        pred_orig = clf.predict(Z_aug[test_idx])
+        pred_flip = clf.predict(Z_flip[test_idx])
 
     violation_rate = float((pred_orig != pred_flip).mean())
     return violation_rate
