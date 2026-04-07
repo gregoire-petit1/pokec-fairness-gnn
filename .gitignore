@@ -27,8 +27,8 @@ env/
 data/raw/
 data/splits/
 
-# Results (generated artifacts — track CSVs, ignore figures)
-results/figures/
+# Results (generated artifacts — track both CSVs and figures)
+# results/figures/ — tracked intentionally for academic submission
 
 # Lock files (optional: keep uv.lock for reproducibility)
 # uv.lock
