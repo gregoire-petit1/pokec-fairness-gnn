@@ -5,7 +5,8 @@ data:
   raw_dir: data/raw/pokec-z
   splits_dir: data/splits
   split_ratios: [0.6, 0.2, 0.2]
-  target_col: I_am_working_in_field
+  # Selected from target sweep (40 runs): F1=0.939, ΔDP=0.037 — see results/metrics/target_sweep.csv
+  target_col: completed_level_of_education_indicator
   sensitive_cols: [gender, region]
 
 model:
