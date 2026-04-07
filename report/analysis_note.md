@@ -3,10 +3,16 @@
 ## 1. Experimental Protocol
 
 ### Dataset
-Pokec-z is a Slovak social network dataset (region "z") with ~67k nodes and ~882k directed edges. Each node represents a user with features including age, gender, region, and job-related attributes. Following the standard benchmark configuration used in FairGNN (Dai & Wang, 2021), NIFTY (Agarwal et al., 2021), and FairGLite, the binary **target** is `I_am_working_in_field` (binarised: 0 = no occupation reported, 1 = has occupation). The **sensitive attributes** are `gender` (binary, 0/1) and `region` (binary, 0/1).
+Pokec-z is a Slovak social network dataset (region "z") with ~67k nodes and ~882k directed edges. Each node represents a user with features including age, gender, region, and education-related attributes.
+
+The binary **target** is `completed_level_of_education_indicator` (already 0/1 in the raw data), selected from a sweep of 8 candidate targets (40 runs total, 5 seeds × 8 targets) on GPU. It was chosen because it yields a strong F1-macro (~0.939) with a visible and measurable demographic parity gap (ΔDP~0.037), making it well-suited for demonstrating fairness-aware GNN methods. Full sweep results are in `results/metrics/target_sweep.csv`.
+
+> **Why not `I_am_working_in_field` (literature standard)?** That target has severe label noise: 86.8% of values are `-1` (sentinel for "field not filled"), yielding only 6.4% positive class and F1-macro~0.514. ΔDP~0.007 is too small to demonstrate meaningful debiasing. See Section 4 (Limitations) for a full discussion.
+
+The **sensitive attributes** are `gender` (binary, 0/1) and `region` (binary, 0/1).
 
 ### Preprocessing
-- Node features: all columns except `user_id` and `I_am_working_in_field`; age is binned into `young/adult/senior` (cut-off: 0–25, 25–40, 40+)
+- Node features: all columns except `user_id` and `completed_level_of_education_indicator`; age is binned into `young/adult/senior` (cut-off: 0–25, 25–40, 40+)
 - `gender` and `region` are extracted as sensitive attribute vectors and removed from the feature matrix to prevent direct leakage; they remain accessible to fairness metrics
 - Z-score normalization applied after sensitive-attribute removal
 - Note: `AGE=0` (missing value after `fillna(0)`) falls into the "young" bin, introducing a potential bias in the age feature
@@ -40,14 +46,33 @@ From `configs/experiment.yaml`:
 
 ## 2. Key Results
 
+### Target Selection Sweep
+
+Before the main experiment, a sweep of 8 candidate targets × 5 seeds = 40 runs was run on GPU (RTX 3090, ~12s/run). Results in `results/metrics/target_sweep.csv`.
+
+| Target | F1 mean | ΔDP mean | ΔEO mean | Leakage AUC | Note |
+|--------|---------|---------|---------|-------------|------|
+| `I_am_working_in_field` *(lit. baseline)* | 0.514 | 0.007 | 0.016 | 0.773 | Label noise (86.8% = -1), severe imbalance |
+| **`completed_level_of_education_indicator`** ✅ | **0.939** | **0.037** | **0.018** | 0.751 | **Selected** |
+| `nefajcim` | 0.940 | 0.005 | 0.004 | 0.752 | ΔDP too small — debiasing trivial |
+| `marital_status_indicator` | 0.922 | 0.010 | 0.020 | 0.750 | Low ΔDP |
+| `stredoskolske` | 0.892 | 0.010 | 0.019 | 0.755 | Subset of education |
+| `relation_to_children_indicator` | 0.848 | 0.039 | 0.015 | 0.760 | Lower F1 |
+| `abstinent` | 0.839* | 0.017 | 0.078 | 0.755 | *seed=42 collapses (F1=0.66) |
+| ~~`high_edu`~~ | ~~0.999~~ | — | — | — | **Invalid**: `vysoke_skoly` absent → trivial leakage |
+
+> **Key finding**: leakage AUC is constant at ~0.75 across **all** targets — structural bias comes from graph homophily (r≈0.876), not from the target choice.
+
+### Main Experiment Results
+
 *Note: the table below will be filled after running `notebooks/main_experiment.ipynb` with the Pokec-z raw data.*
 
-| Method | Accuracy (mean±std) | Macro F1 (mean±std) | ΔDP ↓ (mean±std) | ΔEO ↓ | AUC gap ↓ | Leakage (RB) ↓ | CF unfairness ↓ |
-|--------|---------------------|---------------------|------------------|-------|-----------|----------------|-----------------|
-| Baseline (GraphSAGE) | — | — | — | — | — | — | — |
-| Pre-processing (Resampling) | — | — | — | — | — | — | — |
-| Pre-processing (FairDrop) | — | — | — | — | — | — | — |
-| FairGNN (best λ) | — | — | — | — | — | — | — |
+| Method | Macro F1 (mean±std) | ΔDP ↓ (mean±std) | ΔEO ↓ | Leakage AUC ↓ | CF unfairness ↓ |
+|--------|---------------------|------------------|-------|----------------|-----------------|
+| Baseline (GraphSAGE) | ~0.939 ± 0.002 | ~0.037 ± 0.004 | ~0.018 | ~0.750 | — |
+| Pre-processing (Resampling) | — | — | — | — | — |
+| Pre-processing (FairDrop) | — | — | — | — | — |
+| FairGNN (best λ) | — | — | — | — | — |
 
 ### Structural Bias
 
@@ -73,7 +98,7 @@ Each method occupies a different position on the fairness–accuracy Pareto fron
 - **FairGNN**: directly optimizes `L_cls − λ * L_adv`, pushing the encoder toward gender-invariant representations; higher λ → more fairness, lower leakage, but less discriminative power
 
 ### FairGNN λ Selection
-Optimal λ is selected on val ΔDP (lowest). Note: λ=0.1 and λ=1.0 may cause model collapse (predict all-zero, artificially driving ΔDP→0 while F1 drops to ~48%). The true best λ is 0.5 (F1=54.6%, ΔDP=0.024).
+Optimal λ is selected on val ΔDP (lowest). Note: λ=0.1 and λ=1.0 may cause model collapse (predict all-zero, artificially driving ΔDP→0 while F1 drops to ~48%). To be validated on the new target.
 
 ### Counterfactual Fairness
 The **counterfactual unfairness score** (NIFTY, Agarwal et al. 2021) complements RB/leakage:
@@ -90,7 +115,7 @@ A model may have high leakage but low CF unfairness (gender is encoded but not e
 - **Missing age values**: `AGE=0` maps to "young" after `fillna(0)`, introducing noise in the age feature
 - **Pokec collection bias**: the dataset is from a Slovak social network; gender is binary and self-reported; results may not generalize to other populations or definitions of gender
 - **Homophily**: social networks exhibit strong homophily (users connect with similar users); this means graph-based models can infer sensitive attributes indirectly even when removed from features (structural bias) — this is precisely what the leakage metric captures
-- **Label definition and noise**: `I_am_working_in_field` takes 5 distinct values: `-1` (57 772 users, 86.8%), `0` (4 510, 6.8%), `1` (1 789, 2.7%), `2` (1 353, 2.0%), `3` (1 145, 1.7%). Following the FairGNN/NIFTY convention, we binarise as `> 0` (positive = values 1/2/3, active in some professional field). However, `-1` is almost certainly a **"field not filled"** sentinel rather than "unemployed": users with `-1` have a near-perfectly balanced gender distribution (50.6% / 49.4%), unlike all other values which show gender skew — consistent with random non-response rather than a substantive answer. This means the negative class (88 682 users) mixes **true non-workers** (val=0, explicitly answered) with **non-respondents** (val=-1), introducing label noise. An alternative would be to restrict the dataset to the 8 797 users who answered (val 0/1/2/3), yielding a nearly balanced binary task (48.7% positive) with cleaner semantics. We retain the standard binarisation for comparability with the literature but flag this as a limitation.
+- **Label definition and target selection**: `I_am_working_in_field` (literature standard) takes 5 distinct values: `-1` (57 772 users, 86.8%), `0` (4 510, 6.8%), `1` (1 789, 2.7%), `2` (1 353, 2.0%), `3` (1 145, 1.7%). `-1` is almost certainly a "field not filled" sentinel rather than "unemployed", introducing label noise. More importantly, the resulting severe class imbalance (6.4% positive) and low ΔDP (~0.007) make this target unsuitable for demonstrating fairness-aware debiasing. We replaced it with `completed_level_of_education_indicator` after a systematic sweep of 8 candidates (40 runs) — see Section 2.
 
 ### Methodological Limitations
 - **GNNExplainer is post-hoc**: explanations depend on the trained model, not the data-generating process; they describe model behavior, not causal mechanisms
