@@ -39,6 +39,7 @@ data/splits/
 
 # Misc
 *.log
-soc-pokec-readme.txt
-enonce.pdf
-2205.05396v2.pdf
+# Ignore PDFs at root only (docs/ copies are tracked)
+/enonce.pdf
+/2205.05396v2.pdf
+/soc-pokec-readme.txt
