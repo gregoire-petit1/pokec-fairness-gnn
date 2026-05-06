@@ -34,6 +34,7 @@ date: 2026-04-07
 | GAP 1 | Leakage FairGNN non mesuré | Haut | 🟢 EASY (30 min) | ✅ DONE — 0,8586 (leakage > baseline !) |
 | GAP 2 | Leakage Resampling non mesuré | Haut | 🟢 EASY (15 min) | ✅ DONE — 0,8163 (≈ baseline) |
 | GAP 3 | CF scores Resampling & FairGNN non mesurés | Moyen | 🟢 EASY (30 min) | ✅ DONE — RS=0,012 FairGNN=0,014 |
+| GAP PT | Post-traitement (calibration de seuils) absent | Haut | 🟢 EASY (2h) | ✅ DONE — post-DP: ΔDP=0,007 (−84%), F1=0,937 |
 | GAP HP | num_layers impact sur le biais structurel | Moyen | 🟢 EASY (1h) | ⬜ TODO |
 | GAP 7 | Robustesse des métriques de fairness | Moyen | 🟢 EASY (1h) | ⬜ TODO |
 | GAP 4 | Paradoxe FairDrop : leakage ↑ quand ΔDP ↓ | Critique | 🟡 MEDIUM (2h) | ⬜ TODO |
