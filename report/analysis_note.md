@@ -614,6 +614,57 @@ Le tableau de couverture de §5.1.ter, mis à jour :
 
 ---
 
+### 5.2.bis.bis Vainqueur par axe — qui domine où, et avec quel ΔDP ?
+
+Au-delà de la comparaison single-axis sur l'axe ciblé (§5.2.bis), il faut
+regarder **toutes les méthodes sur tous les axes** pour comprendre où chaque
+chaîne fonctionne ou échoue. Tableau condensé : pour chaque axe sensible,
+on garde la méthode qui minimise ΔDP parmi les ~20 variantes du benchmark.
+
+| Axe | Cardinalité | Baseline ΔDP | 🏆 Meilleur ΔDP | Méthode gagnante | F1 |
+|---|---|---:|---:|---|---:|
+| **gender** | 2 (équilibré) | 0.0429 | **0.0027** (-94 %) | TabICL+DPT@gender | 0.95 |
+| **age_group** | 3 (déséquilibré) | 0.0560 | **0.0438** (-22 %) | GraphSAGE+DPT@age_group | 0.93 |
+| **region** | 2 (71/29) | 0.0532 | **0.0168** (-68 %) | TabICL+DPT@region | 0.95 |
+| **gender × age** | 6 cellules | 0.0872 | **0.0732** (-16 %) | GraphSAGE+DPT@age_group | 0.93 |
+| **gender × region** | 4 cellules | 0.0929 | **0.0534** (-43 %) | TabICL+DPT@region | 0.95 |
+
+**Sept observations qui structurent la conclusion** :
+
+1. **DPT gagne partout, mais axe par axe.** Sur les 5 axes, le winner est
+   toujours une variante DPT calibrée *sur l'axe en question*. Pas de
+   méthode universelle (sauf la composite, cf. §5.2.ter).
+
+2. **Effet collatéral utile** : DPT@region réduit non seulement
+   `ΔDP(region)` mais aussi `ΔDP(gender × region)` (0.093 → 0.053). Logique :
+   les axes croisés *qui contiennent region* bénéficient mécaniquement de la
+   calibration sur region. Pareil pour DPT@age_group sur gender × age.
+
+3. **Effet collatéral négatif** : DPT@gender empire `ΔDP(gender × age)`
+   (0.087 → 0.099, +14 %). Egaliser sur gender redistribue le biais sur la
+   cellule conjointe. C'est le **whack-a-mole intersectionnel** prédit par
+   Crenshaw, ici quantifié.
+
+4. **FairGNN est sévèrement Pareto-dominé sur les intersectionnels** :
+   ΔDP(gender × age) passe de 0.087 (baseline) à **0.154** (+76 %) avec
+   FairGNN(λ=5.0). Le coût d'une méthode in-training adversariale binaire
+   est de **réinjecter du biais sur les axes qu'elle ne voit pas**.
+
+5. **Reweighting (Kamiran-Calders) est faible ici, pas en général** : -10 %
+   au mieux sur ce dataset équilibré (gender 51/49). Ce n'est pas une
+   limite de la méthode, c'est une limite **de Pokec-z** : KC corrige
+   l'imbalance (s, y) qui n'existe pas vraiment ici.
+
+6. **Le leakage AUC reste plat partout** (~0.81 GraphSAGE, ~0.88 TabICL).
+   Ni DPT, ni EOT, ni Reweighting ne touchent l'espace latent. Seul INLP
+   (lever 3, à venir) peut le réduire.
+
+7. **Aucune chaîne unique ne gagne sur les 5 axes en même temps**. Pour
+   couvrir simultanément, deux options : (a) composite DPT (§5.2.ter), (b)
+   composer plusieurs DPT séquentiellement (à explorer).
+
+---
+
 ### 5.2.ter Composer plusieurs DPT — DPT sur l'attribut composite
 
 Single-axis DPT gagne sur l'axe ciblé mais pas sur les autres : DPT@gender
