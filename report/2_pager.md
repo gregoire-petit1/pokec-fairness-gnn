@@ -6,10 +6,10 @@
 
 **Données.** Pokec-z (subset officiel FairGNN, *Žilinský kraj*) : 66 569
 nœuds, ~729 k arêtes, 264 features tabulaires. Reproduction sur **Pokec-n**.
-Cible : `completed_level_of_education_indicator` (binaire, 47.7 %
-positif). Attributs sensibles : `gender`, `region` (binaires),
-`age_group` (3 classes), plus les intersections `gender × age_group` et
-`gender × region` — soit **5 axes** simultanés.
+Cible : `completed_level_of_education_indicator` (binaire, 47.7 % positif).
+Attributs sensibles : `gender`, `region` (binaires), `age_group` (3 classes),
+plus les intersections `gender × age_group` et `gender × region` — soit
+**5 axes** simultanés.
 
 **Splits.** Stratifié `y × gender` 60/20/20. Multi-seed `[3, 7, 21, 42, 99]`.
 
@@ -32,8 +32,10 @@ no-pandas/no-loops enforced.
 
 ## 2. Finding 1 — Une toolbox, chaque outil sa métrique
 
-Résultat empirique principal : **les méthodes de fairness ne sont pas
-substituables**, chacune attaque une dimension différente du problème.
+Notre résultat empirique principal sur cette première dimension est que
+**les méthodes de fairness ne sont pas substituables**. Chaque famille
+attaque une partie spécifique du problème, et il faut souvent en composer
+plusieurs pour traiter les trois métriques en même temps.
 
 ![Fig 1](results/figures/fig1_toolbox_per_metric.png)
 
@@ -41,9 +43,10 @@ substituables**, chacune attaque une dimension différente du problème.
 mais ne touche pas le leakage. **INLP** (vert) tombe le leakage à 0.71
 mais ne change pas ΔDP. **FairGNN** (rouge) bouge un peu les deux au
 prix de F1. Seul l'**ULTIMATE** (orange = TabICL+INLP_composite+
-DPT_composite) **règle les trois en même temps**.*
+DPT_composite) règle les trois en même temps.*
 
-Concrètement, pour un ingénieur qui voudrait une checklist :
+Pour un ingénieur qui voudrait une checklist, le mapping métrique → outil
+est le suivant :
 
 | Si tu veux réduire... | Utilise | Pourquoi |
 |---|---|---|
@@ -52,17 +55,27 @@ Concrètement, pour un ingénieur qui voudrait une checklist :
 | **Leakage** (sensible récupérable depuis embeddings) | **INLP** | projette l'espace orthogonal aux directions du sensible |
 | **Tout en même temps** | **INLP_composite + DPT_composite** | les deux sont orthogonaux et se composent sans conflit |
 
-Le théorème de Chouldechova-Kleinberg 2017 dit que ΔDP=0 et ΔEO=0 sont
-incompatibles dès que les taux de base diffèrent par groupe. On le
-confirme : DPT@age_group baisse ΔDP de 0.075 à 0.044 mais double ΔEO
-(0.034 → 0.074). Choix normatif, pas algorithmique.
+Cette toolbox a une conséquence directe : **un foundation model + 30 lignes
+de post-process Pareto-domine FairGNN sur Pokec-z**. TabICL+EOT atteint
+F1=0.946 et ΔDP=0.007 contre FairGNN qui plafonne à F1=0.853 et ΔDP=0.009.
+On gagne 9 points de F1 *et* on est légèrement plus équitable, à un coût
+d'entraînement quasi-nul (TabICL est frozen, le calibrage des seuils prend
+moins d'une seconde). C'est un résultat qui invite à la prudence avant
+d'engager une méthode in-training adversariale sophistiquée.
+
+Le théorème de Chouldechova-Kleinberg (2017) dit par ailleurs que ΔDP=0 et
+ΔEO=0 sont mathématiquement incompatibles dès que les taux de base diffèrent
+entre groupes — ce qu'on vérifie expérimentalement : DPT@age_group baisse
+ΔDP de 0.075 à 0.044 mais double ΔEO (0.034 → 0.074). Choisir une métrique
+n'est pas un choix algorithmique, c'est un **choix normatif**.
 
 ## 3. Finding 2 — TabICL tient la composition multi-axes, GraphSAGE s'écrase
 
-Quand on demande la fairness sur les **3 axes simultanément** (`gender +
-age_group + region`, encodés en attribut composite à 12 cellules), il
-faut composer INLP_composite (latent) + DPT_composite (sortie). C'est
-notre chaîne ULTIMATE.
+Le second résultat porte sur la **fairness sur plusieurs variables
+simultanément** (gender + age_group + region, encodés en attribut composite
+à 12 cellules). Pour traiter cinq axes à la fois, il faut composer
+INLP_composite (latent) + DPT_composite (sortie). C'est notre chaîne
+ULTIMATE.
 
 ![Fig 2](results/figures/fig2_chain_tabicl_vs_graphsage.png)
 
@@ -70,44 +83,113 @@ notre chaîne ULTIMATE.
 F1=0.87 ; GraphSAGE chute à 0.59 (perte de 35 pp de F1). À droite : les
 deux chaînes atteignent leakage = chance level (0.5).*
 
-**Pourquoi GraphSAGE s'écrase et pas TabICL ?** `r(region) = 0.901` —
-le graphe est très homophile en region. Le message passing recombine
-les features d'un nœud avec celles de ses voisins (qui partagent
-region) ; les embeddings GraphSAGE *encodent intensément la region*.
-Quand INLP supprime ces directions, la représentation est dévastée. À
-l'inverse, TabICL ne consomme jamais le graphe → ses embeddings ne sont
-pas dominés par la region → INLP ne casse rien d'essentiel.
+**Pourquoi GraphSAGE s'écrase et pas TabICL ?** Les coefficients
+d'assortativité de Newman (2003) racontent toute l'histoire : `r(gender) =
+−0.046` (le graphe n'est pas du tout homophile en gender), mais `r(region) =
+0.901` (le graphe est massivement homophile en region). Le message passing
+de GraphSAGE recombine les features d'un nœud avec celles de ses voisins ;
+quand ces voisins partagent presque toujours la même region, l'embedding
+final encode la region beaucoup plus intensément que la feature brute ne le
+laissait penser. Quand INLP_composite supprime ensuite les directions
+sensibles, il enlève une part majeure de l'information utile et la
+représentation s'effondre. TabICL, qui ne consomme jamais le graphe, n'a
+pas ce problème : ses embeddings ne sont pas dominés par la region, donc
+INLP ne casse rien d'essentiel.
 
-**Multi-seed [3, 7, 21, 42, 99]** confirme : ΔDP gender ULTIMATE = 0.006
-± 0.005 ; leakage gender = 0.500 ± 0.010 ; F1 = 0.87 ± marginal sur
-TabICL. **Reproduction sur Pokec-n** : tous les chiffres reproduisent à
-écart < 0.01.
+**La règle pratique qui en sort** est utilisable avant tout entraînement :
+mesurer `r(s)` pour chaque attribut sensible. Si `r(s)` est faible, le
+graphe n'aide pas à prédire la cible *et* n'amplifie pas le biais marginal,
+auquel cas un foundation model tabulaire + post-process est presque
+toujours le bon choix. Si `r(s)` est élevé (le cas typique des datasets
+fairness-on-graphs publiés), les méthodes in-training graphiques redeviennent
+nécessaires parce que le post-process, qui n'opère que sur les sorties, ne
+peut pas atteindre l'espace latent biaisé. Sur Pokec-z, `r(gender) = -0.046`
+aurait dû nous orienter vers TabICL avant même de lancer GraphSAGE.
+
+La validation multi-seed `[3, 7, 21, 42, 99]` confirme la stabilité : ΔDP
+gender ULTIMATE = 0.006 ± 0.005 ; leakage gender = 0.500 ± 0.010 ; F1 =
+0.87 à dispersion marginale sur TabICL. La reproduction sur Pokec-n donne
+les mêmes chiffres à un écart inférieur à 0.01.
 
 ## 4. Compromis perf ↔ équité ↔ robustesse
 
-- **Perf vs équité** : 8 pp de F1 pour la fairness multi-axes complète
-  sur TabICL. **Acceptable**. Sur GraphSAGE, c'est −35 pp = inutilisable.
-- **Pas de free-lunch intersectionnel** : DPT@gender seul atteint ΔDP
-  gender = 0.004 mais laisse ΔDP gender×age à 0.10 (whack-a-mole).
-- **Robustesse** : la chaîne post-hoc préserve la robustesse héritée
-  (GraphSAGE robuste à bruit features σ ≤ 0.3 et edge drop ≤ 30 %
-  d'après le repo amont) parce qu'elle ne modifie pas l'encoder.
+**Sur l'axe perf vs équité**, payer 8 points de F1 pour obtenir la
+fairness multi-axes complète sur TabICL est un compromis défendable. Sur
+GraphSAGE, perdre 35 points de F1 pour le même résultat de fairness rend
+la chaîne inutilisable en production — c'est exactement le genre de
+situation où le coût de la fairness fait basculer le choix d'architecture.
+
+**Il n'y a pas de free-lunch intersectionnel.** Calibrer DPT uniquement sur
+gender atteint ΔDP gender = 0.004 mais laisse ΔDP gender×age_group à 0.10,
+voire le pousse plus haut sur FairGNN où on observe 0.154 sur l'axe croisé
+alors que le marginal gender est à 0.009 — c'est l'effet whack-a-mole que
+prédit l'argument intersectionnel de Crenshaw (1989). Si on veut traiter
+les axes croisés, il faut explicitement construire l'attribut composite
+et calibrer dessus, pas espérer que le débiaising mono-axe suffira.
+
+**Sur la robustesse**, la chaîne post-hoc préserve la robustesse héritée du
+modèle de base parce qu'elle ne modifie pas l'encoder : GraphSAGE reste
+robuste à un bruit features σ ≤ 0.3 et à un edge drop ≤ 30 % (mesures
+issues du repo amont) avant comme après l'application d'INLP+DPT. C'est un
+avantage non-trivial des méthodes post-hoc sur l'in-training fairness, qui
+modifie l'encoder et peut dégrader sa robustesse de façon imprévue.
 
 ## 5. Limites
 
-- *Mono-dataset family* — Pokec-z et Pokec-n sont 2 subsets du même
-  réseau slovaque. Bail/Credit re-graphifiés nécessaires pour un workshop
-  paper.
-- *Probe linéaire* — INLP garantit l'invariance contre un classifieur
-  linéaire. Un MLP probe pourrait recouvrir du signal résiduel.
-- *Pré-traitement implicite* — INLP appliqué sur `x` brut côté TabICL
-  est techniquement du pré-traitement (côté GraphSAGE on opère sur les
-  embeddings, c'est purement post-hoc).
-- *Sémantique opaque* — `region=0/1` binarisé sans documentation par les
-  auteurs FairGNN.
-- *Catégories réifiées* — la fairness ML opère par agrégation de
-  catégories préalables ; une fairness individuelle (Dwork 2012)
-  sortirait du périmètre.
+**Limite philosophique.** Les métriques de fairness encodent toutes une
+position normative implicite : ΔDP=0 incarne l'anti-classification stricte
+(aucune corrélation avec le sensible n'est légitime), ΔEO=0 incarne une
+position méritocratique (les corrélations conditionnées à la vérité sont
+acceptables), la calibration par groupe assume que les écarts marginaux
+sont OK tant que la prédiction est correcte par groupe. Choisir une
+métrique, c'est choisir une éthique — et le théorème d'incompatibilité
+montre qu'on ne peut pas toutes les satisfaire à la fois. Notre toolbox
+fournit les outils, mais elle ne tranche pas le débat normatif.
+
+**Importation culturelle des catégories.** La fairness ML hérite des
+catégories du civil rights act US des années 60 (gender, race binaires)
+et notre dataset les reproduit en réduisant `gender` et `region` à 0/1
+sans documentation sémantique. Hoffmann (2019) et Hanna et al. (2020,
+FAccT) pointent que cette importation efface les axes de discrimination
+locaux. Dans le cas slovaque, les deux axes effectifs sont la minorité
+hongroise (~8 % de la population, concentrée au sud du pays) et surtout
+la minorité Roma (estimée 8-10 %, concentrée à l'est, principal axe de
+discrimination en logement, éducation et emploi). Or le subset FairGNN de
+Pokec-z code `spoken_languages` via 8 indicateurs binaires — anglais,
+allemand, russe, français, espagnol, italien, slovaque, japonais — qui
+sont tous des langues internationales ou la langue majoritaire. Le
+hongrois (`madarsky`), le tchèque (`cesky`) et le romani sont absents.
+Le dataset SNAP original encode pourtant ces langues en texte libre ;
+c'est la curation FairGNN qui a retenu seulement les 8 indicateurs
+"internationaux", probablement parce que Žilinský kraj a une population
+hongroise marginale (0.13 %) et que les Roma y sont peu représentés.
+Conséquence : le subset sur lequel toute la littérature fairness-on-graphs
+travaille est, par construction, aveugle aux axes de discrimination les
+plus pertinents dans le contexte slovaque. Notre analyse opère donc sur
+un proxy culturellement importé, et la fairness multi-axes que nous
+mesurons reste circonscrite aux catégories que la curation a bien voulu
+encoder.
+
+**Limites techniques.** La garantie d'invariance d'INLP n'est valide que
+contre un classifieur linéaire ; un MLP probe non-linéaire pourrait
+recouvrir du signal résiduel dans les directions non couvertes par les
+projections. Côté FairGNN, le discriminateur adversarial est binaire dans
+la formulation standard de Dai & Wang : pour faire de la fairness sur
+`age_group` (3 classes) en in-training, il faudrait redimensionner la tête
+de discriminateur, ce que nous n'avons pas implémenté — l'in-training
+multi-classe reste hors périmètre. Enfin, INLP appliqué côté TabICL opère
+sur les features brutes plutôt que sur des embeddings (TabICL ne les
+expose pas), ce qui est techniquement du pré-traitement. Les deux régimes
+restent comparables en leakage parce que le probe est appliqué sur ce que
+chaque modèle voit, mais le label "post-process pur" ne s'applique
+strictement qu'à GraphSAGE.
+
+**Limite de généralisation.** Pokec-z et Pokec-n sont deux subsets du
+même réseau slovaque, et la cible `completed_level_of_education_indicator`
+est faiblement homophile en gender (`r ≈ -0.046`). Nos conclusions sur
+"TabICL bat GraphSAGE" et "post-process suffit" sont conditionnelles à
+cette propriété : sur un graphe fortement homophile à l'attribut
+sensible, le classement s'inverserait probablement.
 
 **Outils d'IA** (mention exigée) : assistance algorithmique pour la
 réimplémentation FairGNN-GRL, la migration pandas → polars, l'intégration
@@ -116,4 +198,5 @@ rédaction. Code revu, testé, exécuté par les auteurs.
 
 **Références.** Hardt-Price-Srebro 2016 ; Ravfogel et al. 2020 ; Ganin &
 Lempitsky 2015 ; Dai & Wang 2021 ; Kamiran & Calders 2012 ; Chouldechova
-2017 ; Crenshaw 1989 ; Qu et al. 2025 (TabICL) ; Laclau et al. 2024.
+2017 ; Crenshaw 1989 ; Hoffmann 2019 ; Hanna et al. 2020 (FAccT) ;
+Newman 2003 ; Qu et al. 2025 (TabICL) ; Laclau et al. 2024.
