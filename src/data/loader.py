@@ -1,68 +1,79 @@
-"""Load Pokec-z dataset into a PyG Data object."""
+"""Load Pokec-z dataset into a PyG Data object (polars-backed, no pandas)."""
 
-import os
+from pathlib import Path
 
-import pandas as pd
+import numpy as np
+import polars as pl
 import torch
 from torch_geometric.data import Data
 
-# Target column selected based on target sweep (40 runs, 8 candidates, 5 seeds).
-# completed_level_of_education_indicator: F1=0.939, ΔDP=0.037 — visible bias,
-# well-balanced (47.7% positive), and academically interesting for debiasing.
-# Backup: nefajcim (F1=0.940 but ΔDP≈0.005, too clean to demonstrate debiasing).
 TARGET_COL = "completed_level_of_education_indicator"
 
 
-def load_pokec_z(raw_dir: str) -> Data:
+def load_pokec_z(raw_dir: str | Path) -> Data:
     """Load Pokec-z from raw CSV files and return a PyG Data object.
 
-    The target is ``completed_level_of_education_indicator``, a binary column
-    (0/1) that is already binarised in the raw data. It was selected from a
-    sweep of 8 candidate targets because it yields a strong F1 (~0.939) with
-    measurable demographic parity gap (ΔDP~0.037), making it suitable for
-    demonstrating fairness-aware GNN methods.
-
-    Sensitive attributes ``region`` and ``gender`` are kept in the feature
-    matrix so that preprocessing can extract them before building x.
+    Pure polars + numpy + torch path: no pandas, no Python loops on rows. The
+    raw polars DataFrame is attached to ``data.raw_df`` so downstream
+    ``preprocess()`` can extract sensitive attribute columns.
 
     Args:
         raw_dir: Path to the directory containing ``region_job_2.csv`` and
-            ``region_job_2_relationship.txt``.
+            ``region_job_2_relationship.txt`` (the FairGNN Pokec-z subset).
 
     Returns:
-        A :class:`torch_geometric.data.Data` object with attributes:
-        - ``x``: float feature matrix (all columns except ``user_id`` and
-          ``completed_level_of_education_indicator``)
-        - ``edge_index``: long tensor of shape ``[2, num_edges]``
-        - ``y``: long tensor of binary education labels (already 0/1)
-        - ``feature_cols``: list of column names corresponding to ``x``
-        - ``raw_df``: the raw :class:`pandas.DataFrame` (used by preprocessing)
+        :class:`torch_geometric.data.Data` with ``x``, ``edge_index``, ``y``,
+        ``feature_cols`` and ``raw_df`` (polars DataFrame).
     """
-    features_path = os.path.join(raw_dir, "region_job_2.csv")
-    edges_path = os.path.join(raw_dir, "region_job_2_relationship.txt")
+    raw_dir = Path(raw_dir)
+    features_path = raw_dir / "region_job_2.csv"
+    edges_path = raw_dir / "region_job_2_relationship.txt"
 
-    df = pd.read_csv(features_path, sep=",")
-    df = df.fillna(0)
+    # Features CSV — read, fill nulls, append a 0-indexed node id used to remap edges.
+    df = pl.read_csv(features_path).fill_null(0)
+    df = df.with_row_index(name="node_idx", offset=0)
+    df = df.with_columns(pl.col("node_idx").cast(pl.Int64))
 
-    # Build edge index
-    edges = pd.read_csv(edges_path, sep="\t", header=None, names=["src", "dst"])
-    # Remap node ids to 0-indexed
-    node_ids = {nid: idx for idx, nid in enumerate(df["user_id"].values)}
-    edges = edges[edges["src"].isin(node_ids) & edges["dst"].isin(node_ids)].copy()
-    src = edges["src"].map(node_ids).astype(int).values
-    dst = edges["dst"].map(node_ids).astype(int).values
-    edge_index = torch.tensor([src, dst], dtype=torch.long)
+    # Edges (TSV, no header) — read raw, then map both endpoints via inner-joins
+    # on user_id. This replaces the dict-comprehension + .isin() + .map() chain
+    # with a single declarative pipeline (no Python loops over edges).
+    edges = pl.read_csv(
+        edges_path,
+        separator="\t",
+        has_header=False,
+        new_columns=["src_user_id", "dst_user_id"],
+    )
+    id_lookup = df.select(["user_id", "node_idx"])
+    edges = edges.join(
+        id_lookup.rename({"user_id": "src_user_id", "node_idx": "src"}),
+        on="src_user_id",
+        how="inner",
+    )
+    edges = edges.join(
+        id_lookup.rename({"user_id": "dst_user_id", "node_idx": "dst"}),
+        on="dst_user_id",
+        how="inner",
+    )
 
-    # Labels: completed_level_of_education_indicator is already binary (0/1).
-    y = torch.tensor(df[TARGET_COL].values.astype(int), dtype=torch.long)
+    src_np = edges.get_column("src").to_numpy().astype(np.int64)
+    dst_np = edges.get_column("dst").to_numpy().astype(np.int64)
+    edge_index = torch.from_numpy(np.stack([src_np, dst_np], axis=0)).long()
 
-    # Features: all columns except user_id and the target column.
-    # region and gender are kept here so preprocessing can extract them as
-    # sensitive attribute vectors before removing them from x.
-    feature_cols = [c for c in df.columns if c not in ["user_id", TARGET_COL]]
-    x = torch.tensor(df[feature_cols].values, dtype=torch.float)
+    # Labels — already binary 0/1 in this subset.
+    y = torch.from_numpy(
+        df.get_column(TARGET_COL).cast(pl.Int64).to_numpy().astype(np.int64)
+    ).long()
+
+    # Features = everything except user_id, node_idx, and the target.
+    # ``region`` and ``gender`` are kept here so preprocessing can extract them
+    # as sensitive attribute tensors before removing them from x.
+    excluded = {"user_id", "node_idx", TARGET_COL}
+    feature_cols = [c for c in df.columns if c not in excluded]
+    x = torch.from_numpy(
+        df.select(feature_cols).cast(pl.Float32).to_numpy().astype(np.float32)
+    ).float()
 
     data = Data(x=x, edge_index=edge_index, y=y)
     data.feature_cols = feature_cols
-    data.raw_df = df
+    data.raw_df = df  # polars DataFrame
     return data

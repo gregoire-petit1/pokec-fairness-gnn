@@ -21,22 +21,22 @@ import sys
 import time
 
 import numpy as np
+import polars as pl
 import torch
-from sklearn.metrics import f1_score
 
 # Allow running from both repo root and scripts/
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from src.data.loader import load_pokec_z
-from src.data.preprocessing import preprocess
-from src.data.splits import make_splits
-from src.fairness.metrics import (
+from src.data.loader import load_pokec_z  # noqa: E402
+from src.data.preprocessing import preprocess  # noqa: E402
+from src.data.splits import make_splits  # noqa: E402
+from src.fairness.metrics import (  # noqa: E402
     demographic_parity_diff,
     equal_opportunity_diff,
     sensitive_leakage,
 )
-from src.models.graphsage import GraphSAGE
-from src.models.trainer import train, evaluate
+from src.models.graphsage import GraphSAGE  # noqa: E402
+from src.models.trainer import evaluate, train  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Candidate targets
@@ -98,22 +98,26 @@ def set_seed(seed: int) -> None:
         torch.cuda.manual_seed_all(seed)
 
 
-def build_target_y(df, col: str) -> torch.Tensor:
-    """Binarise target column; 'I_am_working_in_field' uses >0, rest direct."""
+def build_target_y(df: pl.DataFrame, col: str) -> torch.Tensor:
+    """Binarise target column from a polars DataFrame.
+
+    'I_am_working_in_field' uses >0 ; the other columns are already binary 0/1
+    in this subset and are passed through after a null-fill to 0.
+    """
     if col == "I_am_working_in_field":
-        vals = (df[col].values > 0).astype(int)
+        vals = df.get_column(col).fill_null(0).gt(0).cast(pl.Int64).to_numpy()
     else:
-        # For direct binary columns (already 0/1), just use as-is
-        vals = (df[col].fillna(0).values > 0).astype(int)
-    return torch.tensor(vals, dtype=torch.long)
+        vals = df.get_column(col).fill_null(0).gt(0).cast(pl.Int64).to_numpy()
+    return torch.from_numpy(vals.astype(np.int64)).long()
 
 
-def build_high_edu_y(df) -> torch.Tensor:
-    """Composite: stredoskolske OR vysoke_skoly."""
-    s = df.get("stredoskolske", 0)
-    v = df.get("vysoke_skoly", 0)
-    vals = ((s + v) > 0).astype(int).values if hasattr(s, "values") else ((s + v) > 0)
-    return torch.tensor(vals, dtype=torch.long)
+def build_high_edu_y(df: pl.DataFrame) -> torch.Tensor:
+    """Composite target: stredoskolske OR vysoke_skoly > 0."""
+    cols = df.columns
+    s = df.get_column("stredoskolske") if "stredoskolske" in cols else pl.zeros(df.height)
+    v = df.get_column("vysoke_skoly") if "vysoke_skoly" in cols else pl.zeros(df.height)
+    vals = (s.fill_null(0) + v.fill_null(0)).gt(0).cast(pl.Int64).to_numpy()
+    return torch.from_numpy(vals.astype(np.int64)).long()
 
 
 def run_one(
