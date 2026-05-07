@@ -124,6 +124,11 @@ TabICL+INLP@region,region,0.0547,0.0057,0.0035,0.5574
 TabICL+INLP@region,age_group,0.0549,0.0383,0.0083,0.9908
 TabICL+INLP@region,gender_x_age,0.0813,0.0768,0.0136,0.938
 TabICL+INLP@region,gender_x_region,0.0904,0.0395,0.0091,0.7625
+TabICL+INLP+DPT@gender,gender,0.0009,0.0188,0.0047,0.7115
+TabICL+INLP+DPT@gender,region,0.0514,0.0006,0.0033,0.62
+TabICL+INLP+DPT@gender,age_group,0.0419,0.0413,0.008,0.9894
+TabICL+INLP+DPT@gender,gender_x_age,0.0952,0.0552,0.0136,0.8999
+TabICL+INLP+DPT@gender,gender_x_region,0.0618,0.0228,0.0098,0.6562
 GraphSAGE+Reweighted@gender,gender,0.0385,0.0194,0.0036,0.8113
 GraphSAGE+Reweighted@gender,region,0.0543,0.0045,0.002,0.6404
 GraphSAGE+Reweighted@gender,age_group,0.0519,0.0394,0.0082,0.8909

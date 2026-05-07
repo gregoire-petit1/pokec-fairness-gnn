@@ -1114,6 +1114,37 @@ def run_all(
                 )
             )
 
+    # ---- Killer combo: INLP + DPT on TabICL (latent + output simultaneously) -
+    # INLP cleans the latent (leakage AUC → ~0.55).
+    # DPT then calibrates the threshold on the cleaned classifier (ΔDP → ~0).
+    # The two operate on orthogonal dimensions: composing them gives the only
+    # chain in the benchmark that addresses BOTH leakage and ΔDP without any
+    # retraining of the foundation model itself.
+    if tab_out is not None:
+        print("[6.8] killer combo: TabICL+INLP+DPT@gender …")
+        tab_inlp = _cached_run(
+            lambda: apply_inlp_to_tabicl(
+                tab_out, data, train_mask, val_mask, test_mask, sensitive_name="gender"
+            ),
+            cache_path,
+            seed,
+            "TabICL+INLP_gender",
+            device,
+        )
+        tab_inlp_dpt = apply_equal_opportunity_threshold(
+            tab_inlp, data, val_mask, test_mask,
+            sensitive_name="gender", strategy="demographic_parity",
+            name_override="TabICL+INLP+DPT@gender",
+        )
+        print(
+            f"      [TabICL+INLP+DPT@gender] acc={tab_inlp_dpt.acc:.4f}  f1={tab_inlp_dpt.f1:.4f}"
+        )
+        all_dfs.append(
+            compute_multi_attr_fairness(
+                tab_inlp_dpt, data, sensitive_attrs, train_mask, test_mask, seed
+            )
+        )
+
     # ---- Pre-process Kamiran & Calders 2012 reweighting (multi-axis) ----------
     # Each example gets weight P(s)*P(y) / P(s,y), pulling the joint towards
     # independence. Works on any cardinality of s — including the multi-class
