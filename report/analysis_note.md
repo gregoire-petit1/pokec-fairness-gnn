@@ -1011,6 +1011,61 @@ plus complète.
 
 ---
 
+### 5.2.octies Contrôle : la supériorité de TabICL n'est PAS une artefact de calibration
+
+Une objection naturelle au finding « TabICL pareto-domine GraphSAGE » :
+TabICL ensemble 8 rounds in-context et applique un `softmax_temperature`
+calibré, donc ses **probabilités sont bien calibrées par construction**.
+GraphSAGE, lui, fait un softmax direct sur les logits du dernier layer,
+qui produit typiquement des probas **sur-confiantes** (Guo et al. 2017).
+On pourrait penser que l'avantage de TabICL+DPT vient en partie de ce
+décalage de calibration : DPT travaille sur les probas, donc des probas
+mieux calibrées → meilleure thresholding.
+
+Pour trancher, on applique **temperature scaling** post-hoc à GraphSAGE
+(``src/postprocess/calibration.py``), suivant Guo, Pleiss, Sun &
+Weinberger (ICML 2017). On fitte un scalaire ``T`` sur la val set en
+minimisant la NLL via L-BFGS, puis on divise les logits test par ``T``
+avant softmax. L'argmax (= prédiction) est préservé ; seules les
+confidences sont rescalées.
+
+**Résultat empirique sur Pokec-z** :
+
+```
+T fitté sur val = 1.020   ← essentiellement 1.0
+```
+
+Une température de 1.02 signifie que **GraphSAGE était déjà quasiment
+calibré sans intervention**. Conséquemment, les chiffres de fairness
+sont **identiques avant et après calibration** :
+
+| Méthode | ΔDP gender | F1 |
+|---|---:|---:|
+| GraphSAGE | 0.0429 | 0.9381 |
+| GraphSAGE+TempCal | 0.0429 | 0.9381 |
+| GraphSAGE+DPT@gender | 0.0075 | 0.9388 |
+| GraphSAGE+TempCal+DPT@gender | 0.0075 | 0.9388 |
+
+→ **L'objection « calibration » tombe**. TabICL bat GraphSAGE pour des
+raisons **fondamentales** (architecture, in-context learning,
+représentation pré-entraînée sur des millions de tâches tabulaires
+synthétiques), **pas pour un artefact de pré-traitement softmax**.
+
+#### Pourquoi GraphSAGE est-il déjà calibré ici ?
+
+Hypothèse plausible : sur Pokec-z, la cible est **bien équilibrée**
+(47.7 % positif), le `dropout=0.5` durant le training agit comme
+régularisation bayésienne implicite, et le grand graphe (66k nœuds)
+contraint le modèle. Trois facteurs qui poussent un GNN vers une
+calibration spontanée. Sur des datasets plus déséquilibrés ou plus
+petits, le résultat serait probablement différent — il faudrait
+reprendre le test.
+
+C'est une **observation à conserver** plutôt qu'un finding fort : elle
+*invalide une objection potentielle* sans inventer un nouveau résultat.
+
+---
+
 ### 5.3 Hypothèse proxy : `region` est-il un proxy de `gender` ou `age` ?
 
 Deuxième volet d'analyse multi-attributs. Marginalement, sur les données brutes
