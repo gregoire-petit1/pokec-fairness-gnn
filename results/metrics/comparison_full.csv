@@ -84,6 +84,16 @@ TabICL+DPT@region,region,0.0168,0.0312,0.0026,0.6208
 TabICL+DPT@region,age_group,0.0617,0.0275,0.0069,0.9919
 TabICL+DPT@region,gender_x_age,0.0867,0.0542,0.0118,0.9392
 TabICL+DPT@region,gender_x_region,0.0534,0.0577,0.0082,0.7729
+GraphSAGE+DPT_composite@gender_age_group_region,gender,0.0018,0.0117,0.0036,0.812
+GraphSAGE+DPT_composite@gender_age_group_region,region,0.0276,0.0214,0.002,0.6411
+GraphSAGE+DPT_composite@gender_age_group_region,age_group,0.0506,0.0172,0.0082,0.8908
+GraphSAGE+DPT_composite@gender_age_group_region,gender_x_age,0.0841,0.0363,0.014,0.8538
+GraphSAGE+DPT_composite@gender_age_group_region,gender_x_region,0.0587,0.0639,0.0067,0.7273
+TabICL+DPT_composite@gender_age_group_region,gender,0.001,0.0132,0.0041,0.8819
+TabICL+DPT_composite@gender_age_group_region,region,0.0302,0.0188,0.0026,0.6208
+TabICL+DPT_composite@gender_age_group_region,age_group,0.0591,0.0068,0.0069,0.9919
+TabICL+DPT_composite@gender_age_group_region,gender_x_age,0.0995,0.0551,0.0118,0.9392
+TabICL+DPT_composite@gender_age_group_region,gender_x_region,0.0557,0.0601,0.0082,0.7729
 GraphSAGE+Reweighted@gender,gender,0.0385,0.0194,0.0036,0.8113
 GraphSAGE+Reweighted@gender,region,0.0543,0.0045,0.002,0.6404
 GraphSAGE+Reweighted@gender,age_group,0.0519,0.0394,0.0082,0.8909

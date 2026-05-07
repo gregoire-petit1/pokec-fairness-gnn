@@ -610,27 +610,39 @@ def apply_equal_opportunity_threshold(
     data,
     val_mask: torch.Tensor,
     test_mask: torch.Tensor,
-    sensitive_name: str = "gender",
+    sensitive_name: str | None = "gender",
     strategy: str = "equal_opportunity",
+    sensitive_tensor: torch.Tensor | None = None,
+    name_override: str | None = None,
 ) -> ModelOutput:
     """Wrap ``out`` with a per-group threshold calibrated on val, applied on test.
 
     Hardt, Price & Srebro 2016 — applicable to any classifier with proba output,
     including frozen ones (TabICL) where in-training fairness can't be inserted.
+
+    The sensitive attribute can be supplied either by name (looked up via
+    ``getattr(data, sensitive_name)``) or directly as a 1-D long tensor of
+    shape ``(N,)`` via ``sensitive_tensor`` — this lets callers pass a
+    composite axis (e.g. ``gender × age_group × region``) without polluting
+    the ``data`` object with temporary attributes.
     """
     from src.postprocess.equal_opportunity import calibrate_predictions
 
     if "proba_val_pos" not in out.extra:
-        raise ValueError(
-            f"cannot post-process {out.name}: extra['proba_val_pos'] missing"
-        )
+        raise ValueError(f"cannot post-process {out.name}: extra['proba_val_pos'] missing")
     if out.proba is None:
         raise ValueError(f"cannot post-process {out.name}: proba is None")
 
     proba_val_pos = out.extra["proba_val_pos"]
     proba_test_pos = out.proba[:, 1] if out.proba.ndim == 2 else out.proba.ravel()
 
-    sensitive_full = getattr(data, sensitive_name).long()
+    if sensitive_tensor is not None:
+        sensitive_full = sensitive_tensor.long()
+    else:
+        if sensitive_name is None:
+            raise ValueError("either sensitive_name or sensitive_tensor must be given")
+        sensitive_full = getattr(data, sensitive_name).long()
+
     sensitive_val_np = sensitive_full[val_mask].cpu().numpy()
     sensitive_test_np = sensitive_full[test_mask].cpu().numpy()
     y_val_np = data.y[val_mask].cpu().numpy()
@@ -650,14 +662,64 @@ def apply_equal_opportunity_threshold(
     f1 = float(f1_score(y_test_np, pred_test_np, average="macro", zero_division=0))
 
     suffix = "EOT" if strategy == "equal_opportunity" else "DPT"
+    if name_override is not None:
+        new_name = name_override
+    else:
+        new_name = f"{out.name}+{suffix}@{sensitive_name}"
     return ModelOutput(
-        name=f"{out.name}+{suffix}@{sensitive_name}",
+        name=new_name,
         acc=acc,
         f1=f1,
         pred=pred_test,
         proba=out.proba,
         embeddings=out.embeddings,
         extra={**out.extra, "thresholds": thresholds, "post_strategy": strategy},
+    )
+
+
+def apply_composite_dpt(
+    out: ModelOutput,
+    data,
+    val_mask: torch.Tensor,
+    test_mask: torch.Tensor,
+    axes: tuple[str, ...] = ("gender", "age_group", "region"),
+) -> ModelOutput:
+    """Apply DPT on the **joint cell** ``(s_a, s_b, s_c, ...)`` over the axes.
+
+    Equalising the positive-prediction rate inside every joint cell mechanically
+    equalises every marginal rate (since each marginal rate is a weighted
+    average of the cell rates). One DPT call covers all axes simultaneously,
+    at the cost of finer-grained calibration: with k_total = ∏ k_axis cells
+    (12 for gender × age_group × region on Pokec-z), each cell calibrates on
+    val_size / k_total samples ≈ 1100 — enough to be stable.
+
+    The composite tensor is built as ``s_a * (k_b·k_c) + s_b * k_c + s_c``.
+    For axes that contain ``-1`` (missing AGE), the value is clamped to 0 to
+    keep keys non-negative — a small bias on the missing-age subset, but
+    ``categorize_age`` already exposes ``data.age_group_known`` for callers
+    who want to filter explicitly.
+    """
+    cardinalities: list[int] = []
+    tensors: list[torch.Tensor] = []
+    for ax in axes:
+        t = getattr(data, ax).long().clamp(min=0)
+        cardinalities.append(int(t.max().item()) + 1)
+        tensors.append(t)
+    # Build composite key: s_a * (k_b·k_c) + s_b · k_c + s_c …
+    composite = torch.zeros_like(tensors[0])
+    multiplier = 1
+    for t, k in zip(reversed(tensors), reversed(cardinalities), strict=True):
+        composite = composite + t * multiplier
+        multiplier *= k
+    axes_label = "_".join(axes)
+    return apply_equal_opportunity_threshold(
+        out,
+        data,
+        val_mask,
+        test_mask,
+        sensitive_tensor=composite,
+        strategy="demographic_parity",
+        name_override=f"{out.name}+DPT_composite@{axes_label}",
     )
 
 
@@ -873,6 +935,26 @@ def run_all(
                         tab_eot, data, sensitive_attrs, train_mask, test_mask, seed
                     )
                 )
+
+    # ---- Composite DPT on (gender × age_group × region) -----------------------
+    # Equalising P(ŷ=1) inside every joint cell mechanically equalises every
+    # marginal rate. One pass covers the 5 axes simultaneously — closest thing
+    # to a single-shot fair-on-everything threshold available without a real
+    # multi-objective optimiser.
+    print("[6.5] post-process composite DPT on (gender × age_group × region) …")
+    base_comp = apply_composite_dpt(base_out, data, val_mask, test_mask)
+    print(f"      [GraphSAGE+DPT_composite] acc={base_comp.acc:.4f}  f1={base_comp.f1:.4f}")
+    all_dfs.append(
+        compute_multi_attr_fairness(base_comp, data, sensitive_attrs, train_mask, test_mask, seed)
+    )
+    if tab_out is not None:
+        tab_comp = apply_composite_dpt(tab_out, data, val_mask, test_mask)
+        print(f"      [TabICL+DPT_composite]    acc={tab_comp.acc:.4f}  f1={tab_comp.f1:.4f}")
+        all_dfs.append(
+            compute_multi_attr_fairness(
+                tab_comp, data, sensitive_attrs, train_mask, test_mask, seed
+            )
+        )
 
     # ---- Pre-process Kamiran & Calders 2012 reweighting (multi-axis) ----------
     # Each example gets weight P(s)*P(y) / P(s,y), pulling the joint towards
