@@ -163,17 +163,15 @@ construction, aveugle aux axes ethniques.
 
 **Limites techniques.** La garantie d'invariance d'INLP n'est valide que
 contre un classifieur linéaire ; un MLP probe non-linéaire pourrait
-recouvrir du signal résiduel dans les directions non couvertes par les
-projections. Côté FairGNN, le discriminateur adversarial est binaire dans
-la formulation standard de Dai & Wang : pour faire de la fairness sur
-`age_group` (3 classes) en in-training, il faudrait redimensionner la tête
-de discriminateur, ce que nous n'avons pas implémenté — l'in-training
-multi-classe reste hors périmètre. Enfin, INLP appliqué côté TabICL opère
-sur les features brutes plutôt que sur des embeddings (TabICL ne les
-expose pas), ce qui est techniquement du pré-traitement. Les deux régimes
-restent comparables en leakage parce que le probe est appliqué sur ce que
-chaque modèle voit, mais le label "post-process pur" ne s'applique
-strictement qu'à GraphSAGE.
+recouvrir du signal résiduel. Côté FairGNN, le discriminateur adversarial
+est binaire dans la formulation standard de Dai & Wang : pour faire de la
+fairness sur `age_group` (3 classes) en in-training, il faudrait
+redimensionner la tête de discriminateur, ce qu'on n'a pas implémenté.
+Côté TabICL, notre pipeline applique INLP sur les features brutes par
+simplicité, mais les embeddings de ligne sont accessibles via
+`TabICLCache.row_repr` ; ré-implémenter INLP dessus rendrait la chaîne
+strictement post-process comme côté GraphSAGE — raffinement d'ingénierie
+non mené.
 
 **Limite de généralisation.** Pokec-z et Pokec-n sont deux subsets du
 même réseau slovaque, et la cible `completed_level_of_education_indicator`
