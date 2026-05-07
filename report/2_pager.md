@@ -149,26 +149,17 @@ fournit les outils, mais elle ne tranche pas le débat normatif.
 **Importation culturelle des catégories.** La fairness ML hérite des
 catégories du civil rights act US des années 60 (gender, race binaires)
 et notre dataset les reproduit en réduisant `gender` et `region` à 0/1
-sans documentation sémantique. Hoffmann (2019) et Hanna et al. (2020,
-FAccT) pointent que cette importation efface les axes de discrimination
-locaux. Dans le cas slovaque, les deux axes effectifs sont la minorité
-hongroise (~8 % de la population, concentrée au sud du pays) et surtout
-la minorité Roma (estimée 8-10 %, concentrée à l'est, principal axe de
-discrimination en logement, éducation et emploi). Or le subset FairGNN de
-Pokec-z code `spoken_languages` via 8 indicateurs binaires — anglais,
-allemand, russe, français, espagnol, italien, slovaque, japonais — qui
-sont tous des langues internationales ou la langue majoritaire. Le
-hongrois (`madarsky`), le tchèque (`cesky`) et le romani sont absents.
-Le dataset SNAP original encode pourtant ces langues en texte libre ;
-c'est la curation FairGNN qui a retenu seulement les 8 indicateurs
-"internationaux", probablement parce que Žilinský kraj a une population
-hongroise marginale (0.13 %) et que les Roma y sont peu représentés.
-Conséquence : le subset sur lequel toute la littérature fairness-on-graphs
-travaille est, par construction, aveugle aux axes de discrimination les
-plus pertinents dans le contexte slovaque. Notre analyse opère donc sur
-un proxy culturellement importé, et la fairness multi-axes que nous
-mesurons reste circonscrite aux catégories que la curation a bien voulu
-encoder.
+sans documentation sémantique (Hoffmann 2019 ; Hanna et al. 2020).
+Concrètement, le subset FairGNN de Pokec-z code `spoken_languages` via
+8 indicateurs binaires — anglais, allemand, russe, français, espagnol,
+italien, slovaque, japonais — qui sont tous des langues internationales
+ou la langue majoritaire. Le hongrois (`madarsky`), le tchèque (`cesky`)
+et le romani sont absents, alors que le dataset SNAP original les encode
+en texte libre. La curation a probablement filtré ces langues parce
+qu'elles ont un taux d'occurrence faible dans Žilinský kraj (0.13 %
+d'hongrois, peu de gitans), mais le résultat est que le subset sur
+lequel toute la littérature fairness-on-graphs travaille est, par
+construction, aveugle aux axes ethniques.
 
 **Limites techniques.** La garantie d'invariance d'INLP n'est valide que
 contre un classifieur linéaire ; un MLP probe non-linéaire pourrait
@@ -190,6 +181,23 @@ est faiblement homophile en gender (`r ≈ -0.046`). Nos conclusions sur
 "TabICL bat GraphSAGE" et "post-process suffit" sont conditionnelles à
 cette propriété : sur un graphe fortement homophile à l'attribut
 sensible, le classement s'inverserait probablement.
+
+**Pour conclure.** Si on prend du recul sur l'ensemble du projet, le
+choix d'axe sensible est probablement la limite la plus structurante.
+Dans un contexte d'Europe centrale, et particulièrement en Slovaquie,
+l'axe ethnique — minorité hongroise et surtout minorité gitane — est
+beaucoup plus prévalent comme source de discrimination effective que
+l'axe du sexe sur lequel on a passé la majeure partie de l'étude.
+Logement, accès à l'éducation, embauche : c'est sur ces axes-là que les
+disparités mesurables sont les plus fortes en Slovaquie. Pouvoir mesurer
+la fairness sur cet axe-là aurait rendu l'analyse beaucoup plus utile
+socialement, mais le dataset ne le permet pas. Notre travail montre donc
+ce qu'on peut techniquement faire avec les outils disponibles, mais le
+verrou principal n'est plus algorithmique — il est en amont, au niveau
+de la collecte et de la curation des données. Tant qu'un dataset
+fairness-on-graphs slovaque sans label ethnique reste le standard de
+la littérature, l'évaluation des méthodes restera détachée des axes de
+discrimination qui comptent vraiment dans le pays d'origine de la donnée.
 
 **Outils d'IA** (mention exigée) : assistance algorithmique pour la
 réimplémentation FairGNN-GRL, la migration pandas → polars, l'intégration
