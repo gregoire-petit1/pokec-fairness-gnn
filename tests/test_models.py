@@ -1,5 +1,6 @@
 import torch
 from torch_geometric.data import Data
+
 from src.models.graphsage import GraphSAGE
 
 

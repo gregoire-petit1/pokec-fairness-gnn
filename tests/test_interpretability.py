@@ -1,7 +1,8 @@
 import torch
 from torch_geometric.data import Data
-from src.models.graphsage import GraphSAGE
+
 from src.interpretability.explainer import explain_node
+from src.models.graphsage import GraphSAGE
 
 
 def test_explain_node_returns_masks():
