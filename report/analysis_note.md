@@ -368,6 +368,63 @@ même whack-a-mole que sur FairGNN, mais d'amplitude bien moindre.
 > min-max correctement (cf. §3) — mais cela invite à la prudence sur
 > l'« obligation morale » d'utiliser des méthodes complexes.
 
+#### Quand le GNN reprend-il l'avantage ? — Argument conditionnel
+
+Le résultat ci-dessus n'est **pas** un verdict universel « foundation model
+> GNN ». Il est conditionnel à une propriété spécifique du graphe Pokec-z
+sur cette cible : `r(gender) ≈ -0.046`, c'est-à-dire **homophilie de genre
+quasi-nulle**. Quand l'attribut sensible n'est pas encodé dans la topologie,
+le message passing ne le propage pas non plus, et donc :
+
+- Le graphe **n'aide pas** à prédire la cible (TabICL > GraphSAGE en F1).
+- Le graphe **n'ajoute pas de biais** marginal de prédiction (ΔDP TabICL ≈
+  ΔDP GraphSAGE).
+- Le post-process EOT, qui n'opère que sur les prédictions finales,
+  **suffit** à corriger les écarts de taux qu'il reste.
+
+Sur un dataset où l'**homophilie de l'attribut sensible serait forte**
+(par exemple un réseau professionnel avec ségrégation de genre marquée,
+typique du LinkedIn-like graph utilisé dans certaines études Bias-In-Hire),
+trois choses changent :
+
+1. **GNN > tabulaire en F1** — le graphe encode des signaux discriminatifs
+   qui ne sont pas dans `x` seul (qui-est-collègue-de-qui informe la
+   prédiction de revenu).
+2. **Le biais structurel devient le canal principal** — la propagation par
+   message passing recouvre l'attribut sensible *même* s'il est retiré des
+   features. Le post-process, qui ne touche que les sorties, ne corrige
+   plus ça parce que les embeddings restent biaisés.
+3. **L'in-training fairness redevient pertinente** — FairGNN / FairDrop /
+   adversarial debiasing visent précisément à *décourager le GNN d'apprendre
+   à recouvrir le sensible* dans son espace latent, ce que le post-process
+   ne peut pas faire par construction.
+
+#### Formulation finale (à reprendre dans la conclusion)
+
+Le compromis observé n'est donc **pas** « post-process vs in-training »
+dans l'absolu, mais :
+
+> Sur des données **faiblement homophiles à l'attribut sensible**, un
+> foundation model tabulaire + post-process bat les méthodes GNN
+> spécialisées sur les deux axes (performance, fairness). Sur des données
+> **fortement homophiles**, les GNN restent justifiés pour la performance,
+> et alors l'in-training fairness l'est aussi.
+
+Le choix de méthode dépend donc d'une mesure préalable du graphe :
+**`r(s)`, le coefficient d'assortativité par rapport à l'attribut sensible**.
+C'est l'invariant qu'on devrait calculer en premier, *avant* d'engager les
+ressources d'entraînement d'un GNN. Cette mesure est triviale (cf.
+`assortative_mixing_coefficient` vectorisé dans `src/fairness/metrics.py`)
+et oriente sans ambiguïté le choix architectural.
+
+Sur Pokec-z, `r(gender) = -0.046` aurait dû — *avant tout entraînement* —
+nous orienter vers le foundation model tabulaire. La littérature
+fairness-on-graphs s'attaque souvent par défaut au cas homophile, ce qui
+est un biais d'échantillonnage des datasets sur lesquels les méthodes
+sont publiées (Pokec-n, Bail, Credit, German Credit re-graphifiés). Notre
+résultat est un **rappel empirique** que la pertinence des méthodes
+in-training graphiques n'est pas universelle.
+
 ---
 
 ### 5.1.bis Surprise centrale : **TabICL bat GraphSAGE en F1**
