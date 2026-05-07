@@ -794,6 +794,126 @@ def apply_inlp_to_tabicl(
     )
 
 
+def _build_composite_tensor(data, axes: tuple[str, ...]) -> torch.Tensor:
+    """Build a per-row integer tensor encoding the joint cell across ``axes``."""
+    cardinalities: list[int] = []
+    tensors: list[torch.Tensor] = []
+    for ax in axes:
+        t = getattr(data, ax).long().clamp(min=0)
+        cardinalities.append(int(t.max().item()) + 1)
+        tensors.append(t)
+    composite = torch.zeros_like(tensors[0])
+    multiplier = 1
+    for t, k in zip(reversed(tensors), reversed(cardinalities), strict=True):
+        composite = composite + t * multiplier
+        multiplier *= k
+    return composite
+
+
+def apply_inlp_composite_to_embeddings(
+    out: ModelOutput,
+    data,
+    train_mask: torch.Tensor,
+    val_mask: torch.Tensor,
+    test_mask: torch.Tensor,
+    axes: tuple[str, ...] = ("gender", "age_group", "region"),
+) -> ModelOutput:
+    """INLP on the **joint cell** across multiple axes — single multi-class
+    probe that simultaneously removes directions encoding any of them."""
+    from sklearn.linear_model import LogisticRegression
+
+    from src.postprocess.inlp import apply_projection, inlp
+
+    if out.embeddings is None:
+        raise ValueError(f"cannot INLP {out.name}: embeddings missing")
+
+    composite = _build_composite_tensor(data, axes).detach().cpu().numpy()
+    z = out.embeddings.detach().cpu().numpy().astype(np.float32)
+    train_idx = train_mask.detach().cpu().numpy().nonzero()[0]
+    val_idx = val_mask.detach().cpu().numpy().nonzero()[0]
+    test_idx = test_mask.detach().cpu().numpy().nonzero()[0]
+
+    _, P = inlp(z[train_idx], composite[train_idx], n_iter=15)
+    z_clean = apply_projection(z, P)
+
+    y_np = data.y.detach().cpu().numpy()
+    clf = LogisticRegression(max_iter=1000, random_state=42)
+    clf.fit(z_clean[train_idx], y_np[train_idx])
+    pred_test_np = clf.predict(z_clean[test_idx]).astype(np.int64)
+    proba_test = clf.predict_proba(z_clean[test_idx]).astype(np.float32)
+    proba_val = clf.predict_proba(z_clean[val_idx]).astype(np.float32)
+
+    pred_test = torch.from_numpy(pred_test_np).long().to(out.pred.device)
+    acc = float(accuracy_score(y_np[test_idx], pred_test_np))
+    f1 = float(f1_score(y_np[test_idx], pred_test_np, average="macro", zero_division=0))
+
+    axes_label = "_".join(axes)
+    return ModelOutput(
+        name=f"{out.name}+INLP_composite@{axes_label}",
+        acc=acc, f1=f1, pred=pred_test, proba=proba_test,
+        embeddings=torch.from_numpy(z_clean).float().to(out.pred.device),
+        extra={
+            **out.extra,
+            "proba_val_pos": proba_val[:, 1] if proba_val.shape[1] >= 2 else proba_val.ravel(),
+            "inlp_axes": axes,
+        },
+    )
+
+
+def apply_inlp_composite_to_tabicl(
+    out: ModelOutput,
+    data,
+    train_mask: torch.Tensor,
+    val_mask: torch.Tensor,
+    test_mask: torch.Tensor,
+    axes: tuple[str, ...] = ("gender", "age_group", "region"),
+    max_train: int = 10_000,
+    seed: int = 42,
+) -> ModelOutput:
+    """Same as :func:`apply_inlp_composite_to_embeddings` but for TabICL: INLP
+    on the joint sensitive cell over features, then re-fit TabICL."""
+    from src.baselines.tabicl import tabicl_predict
+    from src.postprocess.inlp import apply_projection, inlp
+
+    composite = _build_composite_tensor(data, axes).detach().cpu().numpy()
+    x_np = data.x.detach().cpu().numpy().astype(np.float32)
+    y_np = data.y.detach().cpu().numpy().astype(np.int64)
+    train_idx = train_mask.detach().cpu().numpy().nonzero()[0]
+    val_idx = val_mask.detach().cpu().numpy().nonzero()[0]
+    test_idx = test_mask.detach().cpu().numpy().nonzero()[0]
+
+    _, P = inlp(x_np[train_idx], composite[train_idx], n_iter=15)
+    x_clean = apply_projection(x_np, P)
+
+    eval_idx = np.concatenate([val_idx, test_idx])
+    pred_all, proba_pos_all = tabicl_predict(
+        x_clean, y_np, train_idx, eval_idx,
+        seed=seed, max_train=max_train,
+        device=str(data.x.device) if data.x.is_cuda else "cpu",
+    )
+    n_val = val_idx.size
+    proba_val_pos = proba_pos_all[:n_val].astype(np.float32)
+    proba_test_pos = proba_pos_all[n_val:].astype(np.float32)
+    pred_np = pred_all[n_val:]
+    proba_2col_test = np.stack([1.0 - proba_test_pos, proba_test_pos], axis=1)
+
+    pred_test = torch.from_numpy(pred_np).long().to(data.x.device)
+    acc = float(accuracy_score(y_np[test_idx], pred_np))
+    f1 = float(f1_score(y_np[test_idx], pred_np, average="macro", zero_division=0))
+
+    axes_label = "_".join(axes)
+    return ModelOutput(
+        name=f"{out.name}+INLP_composite@{axes_label}",
+        acc=acc, f1=f1, pred=pred_test, proba=proba_2col_test,
+        embeddings=torch.from_numpy(x_clean).float().to(data.x.device),
+        extra={
+            **out.extra,
+            "proba_val_pos": proba_val_pos,
+            "inlp_axes": axes,
+        },
+    )
+
+
 def apply_composite_dpt(
     out: ModelOutput,
     data,
@@ -1169,6 +1289,71 @@ def run_all(
                     tab_inlp_dpt, data, sensitive_attrs, train_mask, test_mask, seed
                 )
             )
+
+    # ---- ULTIMATE COMBO: INLP_composite + DPT_composite on all 3 axes --------
+    # Joint INLP (multi-class probe over 12 cells) cleans all 3 axes from the
+    # representation simultaneously. Then composite DPT calibrates a per-cell
+    # threshold for ΔDP-marginal=0 on every axis. One chain, all 3 axes.
+    print("[6.9] ULTIMATE COMBO: INLP_composite + DPT_composite (all 3 axes) …")
+    base_inlp_comp = _cached_run(
+        lambda: apply_inlp_composite_to_embeddings(
+            base_out, data, train_mask, val_mask, test_mask
+        ),
+        cache_path,
+        seed,
+        "GraphSAGE+INLP_composite",
+        device,
+    )
+    base_inlp_comp_dpt = apply_composite_dpt(
+        base_inlp_comp, data, val_mask, test_mask
+    )
+    base_inlp_comp_dpt = ModelOutput(
+        name="GraphSAGE+INLP+DPT_composite",
+        acc=base_inlp_comp_dpt.acc,
+        f1=base_inlp_comp_dpt.f1,
+        pred=base_inlp_comp_dpt.pred,
+        proba=base_inlp_comp_dpt.proba,
+        embeddings=base_inlp_comp_dpt.embeddings,
+        extra=base_inlp_comp_dpt.extra,
+    )
+    print(
+        f"      [GraphSAGE+INLP+DPT_composite] acc={base_inlp_comp_dpt.acc:.4f}  f1={base_inlp_comp_dpt.f1:.4f}"
+    )
+    all_dfs.append(
+        compute_multi_attr_fairness(
+            base_inlp_comp_dpt, data, sensitive_attrs, train_mask, test_mask, seed
+        )
+    )
+    if tab_out is not None:
+        tab_inlp_comp = _cached_run(
+            lambda: apply_inlp_composite_to_tabicl(
+                tab_out, data, train_mask, val_mask, test_mask
+            ),
+            cache_path,
+            seed,
+            "TabICL+INLP_composite",
+            device,
+        )
+        tab_inlp_comp_dpt = apply_composite_dpt(
+            tab_inlp_comp, data, val_mask, test_mask
+        )
+        tab_inlp_comp_dpt = ModelOutput(
+            name="TabICL+INLP+DPT_composite",
+            acc=tab_inlp_comp_dpt.acc,
+            f1=tab_inlp_comp_dpt.f1,
+            pred=tab_inlp_comp_dpt.pred,
+            proba=tab_inlp_comp_dpt.proba,
+            embeddings=tab_inlp_comp_dpt.embeddings,
+            extra=tab_inlp_comp_dpt.extra,
+        )
+        print(
+            f"      [TabICL+INLP+DPT_composite]    acc={tab_inlp_comp_dpt.acc:.4f}  f1={tab_inlp_comp_dpt.f1:.4f}"
+        )
+        all_dfs.append(
+            compute_multi_attr_fairness(
+                tab_inlp_comp_dpt, data, sensitive_attrs, train_mask, test_mask, seed
+            )
+        )
 
     # ---- Pre-process Kamiran & Calders 2012 reweighting (multi-axis) ----------
     # Each example gets weight P(s)*P(y) / P(s,y), pulling the joint towards

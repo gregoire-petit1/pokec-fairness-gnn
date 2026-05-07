@@ -872,6 +872,61 @@ puisqu'aucune méthode ne calibre simultanément sur les deux axes joints.
 
 ---
 
+### 5.2.sexies La chaîne ULTIME : `TabICL + INLP_composite + DPT_composite`
+
+L'extension naturelle de la chaîne killer combo : appliquer INLP **en
+multi-classes sur l'axe composite** (`gender × age_group × region`, 12
+cellules) — un seul fit qui retire les directions encodant **n'importe
+lequel** des 3 axes — puis composer DPT_composite (égalisation cellulaire
+du taux de prédictions positives sur les 12 cellules).
+
+C'est la première chaîne de notre benchmark qui adresse **simultanément**
+les 5 axes (3 simples + 2 intersectionnels) côté ΔDP **et** côté leakage,
+en une seule passe.
+
+**Chiffres TabICL+INLP+DPT_composite** :
+
+| Métrique | Baseline TabICL | **Ultimate combo** | Réduction |
+|---|---:|---:|---:|
+| F1 | 0.948 | **0.866** | −8.6 % |
+| Leakage gender    | 0.882 | **0.506** | **−42 %, = chance** |
+| Leakage age_group | 0.992 | **0.479** | **−52 %, = chance** |
+| Leakage region    | 0.621 | **0.495** | **−20 %, = chance** |
+| ΔDP gender        | 0.041 | **0.013** | −68 % |
+| ΔDP age_group     | 0.059 | **0.020** | −66 % |
+| ΔDP region        | 0.049 | **0.017** | −65 % |
+
+→ **Tous les leakage à ~0.50 (chance level) sur les 3 axes**. Aucun probe
+linéaire ne peut récupérer l'attribut sensible — pour les 3 axes
+simultanément. ΔDP réduit de ~65 % uniformément.
+
+**Trade-off** : 8 pp de F1 (0.948 → 0.866). Acceptable pour qui veut une
+chaîne qui **garantit** la fairness multi-axes simultanée.
+
+#### Pourquoi GraphSAGE+INLP+DPT_composite *s'effondre* (F1 = 0.59)
+
+| Métrique | Baseline GraphSAGE | INLP+DPT_composite |
+|---|---:|---:|
+| F1 | 0.938 | **0.591** ← collapse |
+| Leakage tous axes | ~0.81 / 0.89 / 0.64 | ~0.50 partout |
+
+Le GNN a accumulé beaucoup d'information dans les directions de
+l'embedding qui sont alignées avec la composante **structurelle** du
+graphe — précisément les directions qu'INLP supprime (puisque
+r(region) = 0.9 et que age_group corrèle indirectement). Quand on
+projette out 30+ directions du 256-dim embedding, on **détruit la
+représentation** apprise.
+
+TabICL est moins affecté parce qu'il a moins exploité ces directions au
+départ (pas de message passing → pas de signal structurel encodé).
+
+**Lecture méthodologique** : pour une chaîne **fully fair multi-axes** sur
+ce dataset, **TabICL est strictement préférable à GraphSAGE** — ce qui
+**confirme et amplifie** le finding de §5.1.ter (« le foundation model
+tabulaire bat le GNN même avec un post-process complet »).
+
+---
+
 ### 5.3 Hypothèse proxy : `region` est-il un proxy de `gender` ou `age` ?
 
 Deuxième volet d'analyse multi-attributs. Marginalement, sur les données brutes
