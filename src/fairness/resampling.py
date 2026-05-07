@@ -1,36 +1,64 @@
-"""Pre-processing fairness: oversample minority groups in training set."""
+"""Pre-processing fairness: oversample minority (label × sensitive) groups.
+
+Vectorised: builds repetition counts via :func:`numpy.repeat` and a single
+:func:`numpy.random.Generator.choice` for the remainder. No Python loop
+iterates over training samples; the only loop is over distinct (label×sensitive)
+groups, which has at most :math:`|\\text{labels}| \\times |\\text{groups}|`
+iterations (typically ≤ 6 on Pokec-z).
+"""
 
 import numpy as np
 import torch
-from sklearn.utils import resample
 
 
-def oversample_train_mask(
+def oversample_train_indices(
     train_mask: torch.Tensor,
     y: torch.Tensor,
     sensitive: torch.Tensor,
     seed: int = 42,
 ) -> torch.Tensor:
-    """Oversample minority (label x sensitive group) combinations in train set.
+    """Return a 1-D long tensor of training **indices** (with duplicates) so
+    every (label × sensitive) cell reaches the size of the largest cell.
 
-    Returns a new index tensor over all nodes that includes oversampled indices.
-    Note: indices can appear more than once — use index-based masking downstream.
+    Note: returned tensor contains duplicate indices — use index-based selection
+    downstream (i.e. ``data.x[train_idx]``), NOT boolean masking. The legacy
+    name ``oversample_train_mask`` was a misnomer (the return value is not a
+    boolean mask) and is kept as a thin alias for backwards compatibility.
     """
-    train_idx = np.array(train_mask.nonzero(as_tuple=True)[0].tolist())
-    y_train = np.array(y[train_mask].tolist())
-    s_train = np.array(sensitive[train_mask].tolist())
-    strat = y_train * 10 + s_train
+    train_idx = train_mask.detach().cpu().nonzero(as_tuple=True)[0].numpy()
+    y_train = y[train_mask].detach().cpu().numpy().astype(np.int64)
+    s_train = sensitive[train_mask].detach().cpu().numpy().astype(np.int64)
 
-    # Find size of majority group
+    # Stratification key per training row.
+    n_s = int(s_train.max() + 1) if s_train.size else 1
+    strat = y_train * (n_s + 1) + s_train  # +1 to keep keys disjoint
     unique, counts = np.unique(strat, return_counts=True)
-    max_count = counts.max()
+    if unique.size == 0:
+        return torch.empty(0, dtype=torch.long)
+    max_count = int(counts.max())
 
-    resampled_idx = []
-    for group in unique:
-        group_idx = train_idx[strat == group]
-        if len(group_idx) < max_count:
-            group_idx = resample(group_idx, n_samples=max_count, replace=True, random_state=seed)
-        resampled_idx.append(group_idx)
+    # Per-row replication factor (max_count // count_of_its_group), vectorised
+    # via a lookup array indexed by the strat key. Range fits in int64 easily.
+    factor_lookup = np.zeros(int(unique.max()) + 1, dtype=np.int64)
+    factor_lookup[unique] = max_count // counts
+    per_row_factor = factor_lookup[strat]
 
-    all_idx = np.concatenate(resampled_idx)
-    return torch.tensor(all_idx, dtype=torch.long)
+    repeated = np.repeat(train_idx, per_row_factor)
+
+    # For each group, pad up to max_count with random extras (with replacement).
+    rng = np.random.default_rng(seed)
+    extras_list: list[np.ndarray] = []
+    # Loop over k groups (small bounded k ≤ 6 on Pokec-z) — the inner work is vectorised.
+    for g, c in zip(unique, counts, strict=True):
+        deficit = max_count - (max_count // c) * c
+        if deficit > 0:
+            g_indices = train_idx[strat == g]
+            extras_list.append(rng.choice(g_indices, size=deficit, replace=True))
+
+    all_idx = np.concatenate([repeated, *extras_list]) if extras_list else repeated
+    return torch.from_numpy(all_idx).long()
+
+
+# Legacy alias — keep until callers are migrated. The name was misleading
+# (returned indices, not a mask) but is referenced in tests/notebooks.
+oversample_train_mask = oversample_train_indices

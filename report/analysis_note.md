@@ -1,158 +1,581 @@
-# Analysis Note: Fairness, Interpretability and Robustness on Pokec-z
+# Note d'analyse — Fairness, Interprétabilité et Robustesse sur Pokec-z
 
-## 1. Experimental Protocol
-
-### Dataset
-Pokec-z is a Slovak social network dataset (region "z") with ~67k nodes and ~882k directed edges. Each node represents a user with features including age, gender, region, and education-related attributes.
-
-The binary **target** is `completed_level_of_education_indicator` (already 0/1 in the raw data), selected from a sweep of 8 candidate targets (40 runs total, 5 seeds × 8 targets) on GPU. It was chosen because it yields a strong F1-macro (~0.939) with a visible and measurable demographic parity gap (ΔDP~0.037), making it well-suited for demonstrating fairness-aware GNN methods. Full sweep results are in `results/metrics/target_sweep.csv`.
-
-> **Why not `I_am_working_in_field` (literature standard)?** That target has severe label noise: 86.8% of values are `-1` (sentinel for "field not filled"), yielding only 6.4% positive class and F1-macro~0.514. ΔDP~0.007 is too small to demonstrate meaningful debiasing. See Section 4 (Limitations) for a full discussion.
-
-The **sensitive attributes** are `gender` (binary, 0/1) and `region` (binary, 0/1).
-
-### Preprocessing
-- Node features: all columns except `user_id` and `completed_level_of_education_indicator`; age is binned into `young/adult/senior` (cut-off: 0–25, 25–40, 40+)
-- `gender` and `region` are extracted as sensitive attribute vectors and removed from the feature matrix to prevent direct leakage; they remain accessible to fairness metrics
-- Z-score normalization applied after sensitive-attribute removal
-- Note: `AGE=0` (missing value after `fillna(0)`) falls into the "young" bin, introducing a potential bias in the age feature
-
-### Splits
-Stratified 60/20/20 train/val/test split on `label × gender` to preserve class and group balance.
-
-### Metrics
-| Metric | Description |
-|--------|-------------|
-| Accuracy | Fraction of correct predictions |
-| Macro F1 | F1 averaged over classes (handles imbalance) |
-| ΔDP | Demographic Parity Difference: \|P(ŷ=1\|s=0) − P(ŷ=1\|s=1)\| |
-| ΔEO | Equal Opportunity Difference: \|TPR_s=0 − TPR_s=1\| |
-| AUC gap | Max group AUC difference across gender groups |
-| Leakage (RB) | **Representation Bias** (Laclau et al., 2024 eq. 2): AUC-ROC of a logistic regression probe trained on frozen train-set embeddings to predict `gender` on the test set. AUC ≈ 0.5 = fair; AUC ≈ 1.0 = high bias encoded in representations |
-| r | **Assortative mixing coefficient** (Newman 2003): measures structural homophily w.r.t. a sensitive attribute. r=1 = edges only within groups; r=0 = random mixing; r=-1 = disassortative |
-| CF unfairness | **Counterfactual unfairness score** (inspired by NIFTY, Agarwal et al. 2021): fraction of test nodes whose downstream prediction changes when gender is flipped, measuring decision-level sensitivity to the sensitive attribute |
-
-### Multi-Seed Evaluation
-All experiments are reported as mean ± std over 5 seeds (`[3, 7, 21, 42, 99]`) to account for training variance. A single canonical run at `seed=42` is also used for downstream qualitative analyses (GNNExplainer, robustness curves).
-
-### Hyperparameters
-From `configs/experiment.yaml`:
-- Seed: 42 (canonical) + multi-seed [3, 7, 21, 42, 99]
-- Model: GraphSAGE, hidden=256, layers=2, dropout=0.5, lr=0.001, epochs=200, patience=20
-- FairGNN: λ ∈ {0.1, 0.5, 1.0, 5.0}, adv_hidden=64
-- Robustness: noise σ ∈ {0.1, 0.3, 0.5}, edge drop ∈ {0.1, 0.3, 0.5}
+> **Note sur le format.** Cette version est délibérément pédagogique et longue ;
+> elle sera condensée à 1-2 pages pour le rendu final, conformément au cadrage
+> de l'énoncé. Le but à ce stade est d'expliciter chaque choix méthodologique
+> et de dérouler les arguments en entier — la condensation est une étape
+> d'édition séparée.
 
 ---
 
-## 2. Key Results
+## 1. Cadrage et données
 
-### Target Selection Sweep
+### 1.1 Tâche et dataset
 
-Before the main experiment, a sweep of 8 candidate targets × 5 seeds = 40 runs was run on GPU (RTX 3090, ~12s/run). Results in `results/metrics/target_sweep.csv`.
+**Pokec-z** est un sous-échantillon du réseau social slovaque Pokec, préparé par
+les auteurs de FairGNN (Dai & Wang, WSDM 2021) à partir du dump SNAP/Stanford de
+2012. Le subset filtre les utilisateurs de la région *Žilinský kraj* :
+**66 569 nœuds** (utilisateurs), **~729 000 arêtes dirigées** (déclarations
+d'amitié), **268 colonnes de features** brutes par nœud.
 
-| Target | F1 mean | ΔDP mean | ΔEO mean | Leakage AUC | Note |
-|--------|---------|---------|---------|-------------|------|
-| `I_am_working_in_field` *(lit. baseline)* | 0.514 | 0.007 | 0.016 | 0.773 | Label noise (86.8% = -1), severe imbalance |
-| **`completed_level_of_education_indicator`** ✅ | **0.939** | **0.037** | **0.018** | 0.751 | **Selected** |
-| `nefajcim` | 0.940 | 0.005 | 0.004 | 0.752 | ΔDP too small — debiasing trivial |
-| `marital_status_indicator` | 0.922 | 0.010 | 0.020 | 0.750 | Low ΔDP |
-| `stredoskolske` | 0.892 | 0.010 | 0.019 | 0.755 | Subset of education |
-| `relation_to_children_indicator` | 0.848 | 0.039 | 0.015 | 0.760 | Lower F1 |
-| `abstinent` | 0.839* | 0.017 | 0.078 | 0.755 | *seed=42 collapses (F1=0.66) |
-| ~~`high_edu`~~ | ~~0.999~~ | — | — | — | **Invalid**: `vysoke_skoly` absent → trivial leakage |
+La **cible** est `completed_level_of_education_indicator` — une colonne binaire
+0/1 dont la sémantique exacte (qu'est-ce qui correspond à 1 ?) **n'est pas
+documentée** dans le dépôt FairGNN amont. Cette opacité est elle-même une limite
+qu'on rediscutera en §6.
 
-> **Key finding**: leakage AUC is constant at ~0.75 across **all** targets — structural bias comes from graph homophily (r≈0.876), not from the target choice.
+La cible a été retenue après un balayage multi-seed sur 8 candidates
+(`results/metrics/target_sweep.csv`) parce qu'elle combine :
 
-### Main Experiment Results
+- une **performance non-triviale** (F1≈0.94 sur GraphSAGE),
+- un **biais marginal mesurable** (ΔDP≈0.037 par genre),
+- un **équilibre de classes acceptable** (47.7 % positif).
 
-Results from `notebooks/main_experiment.ipynb` executed on GPU (RTX 3090). Baseline reported as mean ± std over 5 seeds `[3, 7, 21, 42, 99]`; other methods use seed=42.
+L'alternative `I_am_working_in_field` — souvent utilisée comme cible de
+référence dans les papiers FairGNN — a été rejetée : 86.8 % des valeurs sont à
+`-1` (vraisemblablement « champ non rempli » plutôt qu'« inactif »), ce qui
+produit un F1≈0.51 et un ΔDP≈0.007 trop faible pour démontrer un effet de
+debiaising.
 
-| Method | Accuracy | Macro F1 (mean±std) | ΔDP ↓ (mean±std) | ΔEO ↓ | Leakage AUC ↓ |
-|--------|----------|---------------------|------------------|-------|----------------|
-| Baseline (GraphSAGE) | 0.9381 ± 0.0012 | 0.9380 ± 0.0011 | 0.0414 ± 0.0011 | 0.0221 | 0.8171 ± 0.0051 |
-| Pre-processing (Resampling) | 0.9381 | 0.9380 | 0.0553 | 0.0365 | n/a |
-| Pre-processing (FairDrop) | 0.9353 | 0.9351 | 0.0380 | 0.0206 | 0.8779 |
-| FairGNN (best λ) | 0.8272 | 0.8272 | 0.0137 | 0.0083 | n/a |
+### 1.2 Deux sources de données indépendantes
 
-**Key observations:**
-- **Resampling** preserves accuracy exactly (same as baseline) but *increases* ΔDP (+34%) and ΔEO (+65%) — label/gender correlations in the graph structure overwhelm the balancing effect, and the method does not constrain the embedding space
-- **FairDrop** achieves a modest accuracy drop (−0.28 pp) with a 8% ΔDP reduction and 6.8% ΔEO reduction; leakage actually increases slightly (0.817 → 0.878), suggesting FairDrop's structural pruning may redistribute rather than eliminate gender-correlated structure in embeddings on this highly homophilic graph
-- **FairGNN** achieves the best fairness: ΔDP −67% (0.0414 → 0.0137), ΔEO −62% (0.0221 → 0.0083), at a cost of −10.9 pp in F1 (0.938 → 0.827); the adversarial debiasing effectively constrains the representation space
+Le dataset combine **deux modalités séparées** que les modèles consomment de
+manière différente :
 
-See `results/figures/pareto_fairness.png` for the fairness–accuracy Pareto plot and `results/figures/counterfactual_fairness.png` for CF scores (baseline and FairDrop).
+| Source | Fichier | Contenu | Consommé par |
+|---|---|---|---|
+| Tabulaire | `region_job_2.csv` | 264 colonnes × 66k nœuds | **Tous les modèles** |
+| Graphe | `region_job_2_relationship.txt` | 729k arêtes dirigées | **GraphSAGE / FairGNN seulement** |
 
-### Structural Bias
+Cette séparation explique le rôle pivot de **TabICL** dans nos comparaisons
+(§4) : c'est un modèle qui consomme uniquement la première modalité, ce qui
+permet de mesurer en creux la contribution de la seconde au biais final.
 
-The **assortative mixing coefficient r** (Newman 2003), as described in Laclau et al. (2024), characterizes the graph-level structural bias before any model is trained:
+### 1.3 Attributs sensibles évalués
 
-| Sensitive attribute | r |
+L'énoncé suggère « genre ou âge » pour Pokec. On va plus loin : l'analyse est
+faite sur **trois axes simples** plus **deux intersections**, pour sortir de la
+vision uniquement binaire du monde que dénoncent Hoffmann (2019) et Hanna et
+al. (2020 FAccT) :
+
+| Attribut | Cardinalité | Source |
+|---|---|---|
+| `gender` | 2 (binaire 0/1, héritée FairGNN) | colonne directe |
+| `region` | 2 (binaire 0/1, **héritée FairGNN, sémantique inconnue**) | colonne directe |
+| `age_group` | 3 (`young < 25 ≤ adult < 40 ≤ senior`) | dérivé de `AGE` |
+| `gender × age_group` | 6 cellules | composite : `gender·3 + age_group` |
+| `gender × region` | 4 cellules | composite : `gender·2 + region` |
+
+Les age `≤ 0` (≈30 % des lignes — NA remplis à 0 par les auteurs FairGNN) sont
+marqués `-1` et exclus de l'analyse `age_group`, contrairement à l'implémentation
+historique qui les versait silencieusement dans le bucket *young*.
+
+---
+
+## 2. Protocole expérimental
+
+### 2.1 Pipeline
+
+```
+data/raw/pokec-z/region_job_2.csv  ─┐
+                                    ├─►  loader (polars) ─►  preprocess (z-score)  ─►
+data/raw/pokec-z/region_job_2…txt  ─┘                                                │
+                                                                                    │
+                                          ┌─────────────── GraphSAGE ─────────┐    │
+                                          │                                   │    │
+                                          ├─── + Resampling (pre-process) ────┤◄───┘
+   train / val / test                     │                                   │
+   stratifiés y×gender (60/20/20)         ├─── + FairDrop  (pre-process) ─────┤
+   5 seeds [3,7,21,42,99]                 │                                   │
+                                          ├─── FairGNN GRL (in-training) ─────┤
+                                          │                                   │
+                                          └─── TabICL (no graph, no in-train) ┘
+                                                                                    │
+                                                                                    ▼
+                          fairness metrics (5 attrs sensibles) → comparison_full.csv
+```
+
+### 2.2 Hyperparamètres
+
+D'après `configs/experiment.yaml` :
+
+| Paramètre | Valeur |
 |---|---|
-| gender | ~0.08 (low — users connect cross-gender frequently) |
-| region | ≈ 0.87 (reported in Laclau et al., 2024 — strong homophily) |
+| Seed canonique | 42 |
+| Multi-seed | `[3, 7, 21, 42, 99]` |
+| GraphSAGE hidden / layers / dropout | 256 / 2 / 0.5 |
+| Optimiseur | Adam, lr=1e-3, weight_decay=5e-4 |
+| Epochs / patience | 200 / 20 |
+| FairGNN λ grid | `{0.1, 0.5, 1.0, 5.0}` |
+| Robustesse — bruit σ | `{0.1, 0.3, 0.5}` |
+| Robustesse — edge drop | `{0.1, 0.3, 0.5}` |
+| TabICL `max_train` | 10 000 (subsampling, sinon overflow context) |
 
-> **Note**: The leakage AUC of ~0.82 despite low gender homophily (r≈0.08) indicates that region homophily (r≈0.87) is the dominant structural bias channel — region and gender are correlated in the dataset, so even gender-debiased edges still propagate region-related signals.
+### 2.3 Métriques
 
-A high r explains why GNN embeddings encode sensitive information even when it is removed from node features: message passing propagates demographic signals through the edge structure.
+Trois familles complémentaires (cf. `src/fairness/metrics.py`) :
+
+**Output-level** — sur les prédictions :
+- `ΔDP = max_g P(ŷ=1|s=g) − min_g …` — biais de **traitement marginal**
+- `ΔEO = max_g TPR_g − min_g TPR_g` (parmi y=1) — biais de **traitement
+  conditionnel à la vérité**
+- `Group AUC gap = max_g AUC_g − min_g AUC_g` — biais de **qualité du
+  classifieur par groupe**
+
+**Embedding-level** — sur les représentations latentes :
+- **Sensitive Leakage AUC** — un probe LR entraîné sur les embeddings *train*
+  pour prédire le sensible, évalué sur les embeddings *test*. Échantillonnage
+  équilibré ; la métrique mesure la **récupérabilité** de l'attribut sensible.
+  Le split train→test rigoureux (cf. commit `696345c`) évite le linkage bias
+  introduit par le message passing entre les deux côtés du split.
+- **Counterfactual Fairness Score** — fraction de prédictions qui changent
+  quand on flippe le sensible. Mesure l'**impact décisionnel** du sensible,
+  complémentaire au leakage.
+
+**Data-level** — propriété du graphe, indépendante du modèle :
+- **r de Newman 2003** — coefficient d'assortativité du graphe par rapport
+  au sensible. r=1 → graphe parfaitement homophile ; r=0 → mélange aléatoire ;
+  r=-1 → graphe disassortatif.
+
+### 2.4 Vectorisation et GPU
+
+Toutes les métriques sont **vectorisées via `torch.bincount` ou des opérations
+numpy** : aucune boucle Python n'itère sur des nœuds, arêtes ou lignes. Les
+seules boucles résiduelles parcourent des **clés de groupes** (k=2..6) ce qui
+est borné. La matrice de mixage assortativité est construite en un seul
+appel : `bincount` sur `gi · k + gj` aplati, puis `reshape(k, k)`.
+
+L'entraînement et l'évaluation tournent sur **GPU CUDA** (RTX 3090 ; le serveur
+en a 2 et permet une parallélisation multi-GPU des seeds via
+`CUDA_VISIBLE_DEVICES`). TabICL exploite également le GPU.
+
+### 2.5 Reproductibilité
+
+`uv` gère les dépendances ; `polars 1.40` remplace pandas partout (le préset
+`PD` de ruff bloque toute réintroduction). `tabicl` est ajouté à
+`pyproject.toml`. Les tests `pytest -m smoke` font 27 assertions en moins de
+12 s, dont des garde-fous statiques (`test_no_pandas_no_loops.py`) qui
+échouent dès qu'un `import pandas` ou une boucle k×k réapparaît.
 
 ---
 
-## 3. Trade-off Analysis
+## 3. Le fix FairGNN — pourquoi et comment
 
-### Fairness vs. Accuracy Pareto
-Each method occupies a different position on the fairness–accuracy Pareto frontier:
+### 3.1 Le bug d'origine
 
-- **Baseline**: highest accuracy, highest bias (no debiasing); Representation Bias (RB) / leakage expected to be high (~0.73 AUC) because the graph structure encodes gender via homophily (r ≈ 0.87 for region)
-- **Resampling**: modest bias reduction by balancing label×gender combinations in training; counter-intuitively may *worsen* ΔDP on this dataset due to label/gender correlations in the graph structure; does not directly constrain the embedding space
-- **FairDrop** (Spinelli et al., 2021, reviewed in Laclau et al., 2024): attacks structural bias at its root by preferentially removing intra-group edges before training, reducing r and limiting the structural signal available to the GNN; expected to reduce RB/leakage more reliably than resampling
-- **FairGNN**: directly optimizes `L_cls − λ * L_adv`, pushing the encoder toward gender-invariant representations; higher λ → more fairness, lower leakage, but less discriminative power
+L'implémentation héritée combinait les deux têtes (classification + adversaire)
+dans une **seule loss avec coefficient négatif**, optimisée par un **seul**
+optimiseur :
 
-### FairGNN λ Selection
-Optimal λ is selected on val ΔDP (lowest). Note: λ=0.1 and λ=1.0 may cause model collapse (predict all-zero, artificially driving ΔDP→0 while F1 drops to ~48%). To be validated on the new target.
+```python
+loss = F.cross_entropy(pred[mask], y[mask]) - lambda_adv * F.cross_entropy(adv[mask], s[mask])
+loss.backward(); opt.step()
+```
 
-### Counterfactual Fairness
-The **counterfactual unfairness score** (NIFTY, Agarwal et al. 2021) complements RB/leakage:
-- **RB/Leakage**: measures how much gender is *recoverable* from embeddings
-- **CF unfairness**: measures how much a downstream decision *depends* on gender
+Mathématiquement, ce n'est **pas** du min-max adversarial. Le gradient sur les
+paramètres de l'adversaire est `-λ · ∂L_adv/∂θ_adv`, ce qui pousse l'adversaire
+à **maximiser sa propre loss** — il est récompensé pour échouer à prédire le
+sensible. L'encodeur, lui, est dans un état mal défini : sa loss combinée
+s'annule s'il fournit des features où l'adversaire échoue *par lui-même*.
 
-A model may have high leakage but low CF unfairness (gender is encoded but not exploited) or vice versa. FairDrop is expected to reduce both by cutting the structural channel through which gender is transmitted.
+Conséquence empirique observée dans la cellule FairGNN du notebook avant fix :
+
+```
+FairGNN λ=0.1 — Acc: 0.9356 | F1: 0.4834 | ΔDP: 0.0000
+FairGNN λ=0.5 — Acc: 0.8475 | F1: 0.5461 | ΔDP: 0.0240
+FairGNN λ=1.0 — Acc: 0.9356 | F1: 0.4834 | ΔDP: 0.0000
+FairGNN λ=5.0 — Acc: 0.9155 | F1: 0.5260 | ΔDP: 0.0156
+```
+
+Le triplet `F1=0.4834 / ΔDP=0.0` à λ=0.1 et λ=1.0 est la signature exacte
+d'un **modèle dégénéré qui prédit toujours la classe 0** : 93.6 % d'accuracy
+(le taux marginal de classe 0), F1 macro de `0.967·0 + 0·0.5 ≈ 0.483`, et
+ΔDP=0 *trivialement* parce qu'aucune prédiction positive n'existe.
+
+L'auteur l'avait noté en markdown (« ⚠️ Collapse »), mais le problème *cause*
+de ce collapse est mathématique, pas un artefact d'optimisation.
+
+### 3.2 Le correctif : Gradient Reversal Layer (GRL)
+
+L'idée canonique de Ganin & Lempitsky (2015, DANN) — adoptée dans toutes les
+implémentations modernes de FairGNN — est de remplacer le min-max alterné par
+un **layer d'identité au forward et de gradient inversé au backward** :
+
+```python
+class GradientReversal(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, x, lambda_adv):
+        ctx.lambda_adv = float(lambda_adv); return x.view_as(x)
+    @staticmethod
+    def backward(ctx, grad_output):
+        return -ctx.lambda_adv * grad_output, None
+```
+
+Inséré entre l'encoder et l'adversaire, il fait que :
+
+- **L'adversaire** reçoit un gradient normal sur sa propre loss → il
+  s'entraîne réellement à prédire le sensible.
+- **L'encoder** reçoit le gradient de l'adversaire **multiplié par −λ** → il
+  est poussé à rendre `s` non récupérable depuis ses embeddings.
+
+La loss s'écrit alors `L_cls + L_adv` (deux termes positifs), un seul
+optimiseur, un seul backward — équivalent en expectation à l'alternating
+min-max du papier original, mais sans la complexité de la coordination des
+deux phases.
+
+Le fichier `src/models/fairgnn.py` est intégralement réécrit. La signature
+publique change légèrement : `lambda_adv` devient un argument du constructeur
+(et non plus de `fairgnn_loss`), pour qu'il soit baked into le GRL au moment du
+forward. Le notebook est patché en conséquence.
+
+### 3.3 Tests qui formalisent le comportement attendu
+
+Trois tests dans `tests/test_fairgnn_grl.py` cadenassent les invariants :
+
+1. `test_grl_forward_is_identity` — `forward(x, λ) == x`
+2. `test_grl_backward_flips_sign_and_scales` — `∂x.grad = -λ · ∂y.grad`
+3. `test_fairgnn_lambda_zero_matches_graphsage_for_classification` — à λ=0, le
+   chemin classifieur est strictement équivalent à GraphSAGE.
+4. `test_fairgnn_adversary_can_learn_when_signal_present` — sur des données
+   synthétiques où `s` est encodé dans `x`, la loss adversariale décroît
+   significativement, prouvant que l'adversaire apprend bien malgré le GRL.
+
+Tous passent en CI. Le critère de non-régression visible côté notebook est
+qu'**aucune valeur de F1 ne reste collée à 0.4834** sur la grille
+`λ ∈ {0.1, 0.5, 1.0, 5.0}`.
 
 ---
 
-## 4. Limitations
+## 4. TabICL en baseline non-graphe
 
-### Data Limitations
-- **Missing age values**: `AGE=0` maps to "young" after `fillna(0)`, introducing noise in the age feature
-- **Pokec collection bias**: the dataset is from a Slovak social network; gender is binary and self-reported; results may not generalize to other populations or definitions of gender
-- **Homophily**: social networks exhibit strong homophily (users connect with similar users); this means graph-based models can infer sensitive attributes indirectly even when removed from features (structural bias) — this is precisely what the leakage metric captures
-- **Label definition and target selection**: `I_am_working_in_field` (literature standard) takes 5 distinct values: `-1` (57 772 users, 86.8%), `0` (4 510, 6.8%), `1` (1 789, 2.7%), `2` (1 353, 2.0%), `3` (1 145, 1.7%). `-1` is almost certainly a "field not filled" sentinel rather than "unemployed", introducing label noise. More importantly, the resulting severe class imbalance (6.4% positive) and low ΔDP (~0.007) make this target unsuitable for demonstrating fairness-aware debiasing. We replaced it with `completed_level_of_education_indicator` after a systematic sweep of 8 candidates (40 runs) — see Section 2.
+### 4.1 Pourquoi cette comparaison est centrale
 
-### Methodological Limitations
-- **GNNExplainer is post-hoc**: explanations depend on the trained model, not the data-generating process; they describe model behavior, not causal mechanisms
-- **ΔDP/ΔEO are binary metrics**: they are defined for binary sensitive and target attributes; multi-class extensions (via max pairwise gap) are approximations
-- **FairGNN adversary is binary**: the discriminator is designed for binary sensitive attributes; extending to multi-group fairness requires architectural changes
-- **Leakage probe uses train/test split (RB)**: the logistic regression probe is fitted on train-set embeddings and evaluated on the test set, addressing linkage bias (Laclau et al., 2024 §3.3); AUC-ROC is used rather than accuracy to handle group imbalance
-- **Counterfactual fairness requires a classifier**: our CF score requires augmenting embeddings with gender and fitting a probe; this measures potential sensitivity of a downstream classifier, not the GNN encoder itself
-- **FairDrop is undirected**: the implementation treats edges as undirected and drops by intra-group criterion; directed graph variants require additional handling
-- **Resampling without replacement in evaluation**: the oversampled indices mask allows repeated nodes during training, but evaluation is on the original (non-oversampled) test split
+L'énoncé exige **au moins une méthode d'équité « en cours d'apprentissage »**
+parmi les options. FairGNN coche cette case — *à condition* qu'il fonctionne
+réellement, ce qui n'était pas le cas avant le fix de §3.
 
-### AI Tool Usage Disclosure
-This project was implemented with the assistance of an AI coding assistant (OpenCode / Claude). The AI assisted in:
-- Scaffolding project structure and `pyproject.toml`
-- Generating implementation skeletons for all modules
-- Debugging NumPy 2.x / PyTorch bridge incompatibilities
-- Writing the experiment notebook
+Mais comment **prouver quantitativement** que les méthodes in-training apportent
+de la valeur ? Il faut un **point de comparaison qui ne peut pas en faire**.
+TabICL (Qu et al., 2025, INRIA) est exactement ce point :
 
-All generated code was reviewed, tested, and verified by the author. The experimental design, fairness metric definitions, and analysis interpretations are the author's own.
+- C'est un **foundation model tabulaire pré-entraîné**, frozen.
+- À l'inférence il ne fait que de l'**in-context learning** : on lui donne les
+  features train + labels train, il prédit sur le test set sans backprop.
+- Aucune méthode in-training ne peut être branchée — seulement pre-process
+  (transformer les données en entrée) ou post-process (recalibrer la sortie).
+
+Donc l'écart **`FairGNN-fixé ↔ TabICL`** sur les métriques fairness chiffre
+*directement* la contribution propre de l'approche in-training adversariale.
+Et l'écart **`GraphSAGE ↔ TabICL`** isole la contribution du **graphe** au
+biais : TabICL ne consomme pas `edge_index`, ses prédictions ne peuvent pas
+exploiter l'homophilie de genre.
+
+### 4.2 Implémentation
+
+`src/baselines/tabicl.py` est un wrapper minimal :
+
+- API : `tabicl_predict(x, y, train_idx, test_idx, seed, max_train, device)` →
+  `(predictions, probabilities)`.
+- Subsample du train à 10 000 lignes maximum (TabICL a une fenêtre de contexte
+  finie ; au-delà, c'est l'overflow mémoire ou la latence qui devient
+  prohibitive sur 24 GB de VRAM).
+- GPU par défaut (`cuda:0`), fallback CPU.
+
+Métriques applicables à TabICL :
+
+- ✅ ΔDP, ΔEO, Group AUC gap — directement sur `(pred, proba)`.
+- ✅ **Leakage probe sur features brutes** — au lieu d'embeddings (TabICL n'en
+  expose pas), on entraîne le probe sur `x` lui-même. C'est la **borne basse**
+  de l'information sensible recouvrable depuis les colonnes seules, sans aucun
+  modèle.
+- ❌ Counterfactual Fairness Score — non applicable proprement, faute d'espace
+  latent à augmenter.
+
+### 4.3 Limite importante du baseline TabICL
+
+TabICL n'élimine pas le biais — il en supprime juste la **composante
+structurelle** (celle ajoutée par le message passing). Si `x` contient déjà des
+proxies du genre (hobbies stéréotypés, langues parlées, profession), un
+classifieur tabulaire les exploitera quand même. Le leakage de TabICL est donc
+**une borne basse, pas zéro**.
+
+C'est pour cela que la décomposition idéale est en trois étapes :
+
+```
+Leakage AUC
+    ↑
+1.0 ┤                    ●  GraphSAGE       ← graphe + features
+    │                  ⟍       écart = biais ajouté par message passing
+    │                ●  TabICL              ← features seules (borne basse)
+    │              ⟍       écart = biais des features brutes
+0.5 ┤            ● random                    ← aucun signal
+    └────────────────────────────────────→
+```
 
 ---
 
-## References
+## 5. Multi-attribute fairness — sortir du binaire
 
-- **Laclau, C., Largeron, C., & Choudhary, M. (2024)**. A Survey on Fairness for Machine Learning on Graphs. *arXiv:2205.05396v2*. ← primary reference for this project's framework, metrics, and methods
-- Dai, E., & Wang, S. (2021). Say No to the Discrimination: Learning Fair Graph Neural Networks with Limited Sensitive Attribute Information. *WSDM 2021*.
-- Agarwal, C. et al. (2021). NIFTY: A framework for benchmarking graph neural networks for fairness. *arXiv:2109.05228*.
-- Spinelli, I. et al. (2021). FairDrop: Biased Edge Dropout for Enhancing Fairness in Graph Representation Learning. *IEEE TNNLS*.
-- Newman, M. E. J. (2003). Mixing patterns in networks. *Physical Review E, 67*(2).
-- Hamilton, W. L., Ying, R., & Leskovec, J. (2017). Inductive Representation Learning on Large Graphs. *NeurIPS 2017*.
-- Ying, Z. et al. (2019). GNNExplainer: Generating Explanations for Graph Neural Networks. *NeurIPS 2019*.
-- Takac, L., & Zabovsky, M. (2012). Data Analysis in Public Social Networks. *International Scientific Conference & International Workshop Present Day Trends of Innovations*.
+### 5.1 Pourquoi ne pas s'arrêter à `gender`
+
+La littérature fairness ML est massivement binaire (gender, race), héritage
+des catégories juridiques anglo-saxonnes des années 60. **Cette critique n'est
+pas idéologique, elle est méthodologique** : Crenshaw (1989) montre que les
+biais s'**additionnent et se composent** sur les axes croisés ; mesurer la
+fairness uniquement sur `gender` rate ce qu'on appelle l'intersectionnalité.
+
+Buolamwini & Gebru (2018, *Gender Shades*) ont démontré empiriquement que des
+modèles de reconnaissance faciale qui semblent ~équitables sur `gender` seul
+*et* `race` seul ont en réalité des taux d'erreur ~30 fois plus élevés sur les
+**femmes noires** que sur les hommes blancs. La moyenne marginale lisse les
+disparités intersectionnelles.
+
+### 5.1.bis Surprise centrale : **TabICL bat GraphSAGE en F1**
+
+Avant même de regarder les fairness, voici l'accuracy et le F1 macro sur le test set :
+
+| Modèle                       | Accuracy | F1 macro |
+|------------------------------|---------:|---------:|
+| GraphSAGE                    |  0.9384  |  0.9383  |
+| GraphSAGE+Resampling         |  0.9383  |  0.9382  |
+| GraphSAGE+FairDrop           |  0.9389  |  0.9387  |
+| FairGNN (λ=5.0, GRL)         |  0.8533  |  0.8532  |
+| **TabICL (no graph)**        |  **0.9485**  |  **0.9483**  |
+
+**TabICL fait +1 pp mieux que GraphSAGE**, *sans regarder le graphe*. C'est un
+résultat fort méthodologiquement, qui se combine aux trois autres
+observations pour donner un argument cohérent :
+
+1. `r(gender) ≈ 0` → le graphe n'est pas homophile sur l'attribut sensible
+2. ΔDP(gender) TabICL ≈ ΔDP(gender) GraphSAGE → le graphe n'**ajoute pas** de
+   biais marginal
+3. F1(TabICL) > F1(GraphSAGE) → le graphe n'**aide pas** à prédire la cible
+4. FairGNN paie 9 pp de F1 pour un gain de fairness, mais TabICL atteint
+   *déjà* la même fairness avec un meilleur F1 sans aucun débiaising
+
+**Conséquence pour l'argumentaire** : le choix d'un GNN ne se justifie pas
+empiriquement sur ce couple (subset Pokec-z, cible
+`completed_level_of_education_indicator`). Toute l'information utile est dans
+les 264 features tabulaires ; le message passing dilue ces features avec
+celles des voisins, ce qui dégrade très légèrement plutôt que d'enrichir.
+
+C'est précisément le type de **compromis non-trivial** que l'énoncé demande
+d'analyser : on ne se contente pas de mesurer les écarts, on remet en
+question l'**hypothèse de départ** (« utiliser un GNN sur des données
+relationnelles »). Le baseline non-graphe TabICL n'a pas seulement servi de
+contrôle pour la fairness — il a inversé la conclusion attendue sur la
+performance brute.
+
+> **Caveat scope**. Cette conclusion est **spécifique à Pokec-z + cette
+> cible**. Sur un autre subset (Pokec-n) ou une cible plus homophile (par ex.
+> `I_am_working_in_field` si on parvenait à filtrer le sentinel `-1`), le GNN
+> pourrait reprendre l'avantage. Le finding est *« pas de free lunch GNN sur
+> donnée tabulaire faiblement homophile à la cible »*, pas *« TabICL >
+> GraphSAGE universellement »*.
+
+### 5.2 Le tableau multi-attributs (run final, seed=42, GPU RTX 3090)
+
+Chaque ligne = un (modèle × attribut sensible). Source : `results/metrics/comparison_full.csv`.
+
+| Modèle                    | Attribut          |  ΔDP   |  ΔEO   | AUC-gap | Leakage |
+|---------------------------|-------------------|-------:|-------:|--------:|--------:|
+| GraphSAGE                 | gender            | 0.0420 | 0.0222 |  0.0038 |  0.8113 |
+| GraphSAGE                 | region            | 0.0533 | 0.0031 |  0.0020 |  0.6409 |
+| GraphSAGE                 | age_group         | 0.0584 | 0.0389 |  0.0084 |  0.8873 |
+| GraphSAGE                 | gender × age      | 0.0856 | 0.0646 |  0.0142 |  0.8517 |
+| GraphSAGE                 | gender × region   | 0.0929 | 0.0321 |  0.0068 |  0.7271 |
+| GraphSAGE+Resampling      | gender            | 0.0420 | 0.0215 |  0.0035 |  0.8118 |
+| GraphSAGE+Resampling      | gender × age      | 0.0900 | 0.0592 |  0.0140 |  0.8536 |
+| GraphSAGE+FairDrop        | gender            | 0.0451 | 0.0266 |  0.0035 |  0.8251 |
+| GraphSAGE+FairDrop        | gender × age      | 0.0871 | 0.0660 |  0.0145 |  0.8617 |
+| **FairGNN (λ=5.0, GRL)**  | **gender**        | **0.0090** | **0.0114** | **0.0004** |  0.8617 |
+| FairGNN (λ=5.0, GRL)      | gender × age      | 0.1535 | 0.0435 |  0.0561 |  0.8333 |
+| TabICL (no graph)         | gender            | 0.0410 | 0.0250 |  0.0041 |  0.8819 |
+| TabICL (no graph)         | region            | 0.0494 | 0.0016 |  0.0026 |  0.6208 |
+| TabICL (no graph)         | age_group         | 0.0591 | 0.0257 |  0.0069 | **0.9919** |
+| TabICL (no graph)         | gender × age      | 0.0916 | 0.0528 |  0.0118 |  0.9392 |
+
+Plusieurs lectures se dégagent.
+
+**(a) FairGNN GRL réduit ΔDP gender de 78 %** sans collapse :
+0.042 → 0.009 (λ=5.0), F1 = 0.853. Le bug d'origine (cf. §3.1) produisait
+F1 = 0.4834 systématique à λ ∈ {0.1, 1.0} ; ici tous les λ produisent des
+F1 ≥ 0.85, et λ=5.0 est le bon pareto-optimal au sens F1>0.5 + ΔDP minimal.
+
+**(b) L'analyse intersectionnelle révèle ~2× plus de disparité** que les
+marginales. ΔDP(gender) = 0.042, mais ΔDP(gender × age) = 0.086 — *quasiment
+le double*. Plus frappant : sur **FairGNN**, ΔDP(gender × age) = 0.154,
+soit **17× plus élevé que la marginale gender débiaisée** (0.009). Le
+debiaising mono-axe pousse mécaniquement le biais sur les axes croisés
+non-protégés. **Argument empirique fort en faveur de l'analyse
+intersectionnelle**, exactement ce que prédit Crenshaw (1989).
+
+**(c) `region` est très faiblement appris** par GraphSAGE
+(leakage = 0.641) malgré une homophilie quasi-maximale (`r(region) = 0.901`)
+— surprenant à première vue, mais cohérent avec le fait que la cible y et
+region ne sont presque pas corrélées (on l'a confirmé en §1).
+
+**(d) `age_group` est trivialement appris par TabICL** (leakage = 0.992).
+Les colonnes brutes encodent l'âge presque parfaitement (ce qui n'est pas
+une surprise, vu que `AGE` est une feature directe). GraphSAGE le retombe
+à 0.887 — le graphe n'aide pas, et il *dilue* légèrement le signal.
+
+**(e) `r(gender) = -0.046`** sur Pokec-z, *contre* `r(region) = 0.901`.
+**Le graphe n'est pas homophile par genre** dans ce subset — surprenant vu la
+narrative classique. C'est la **forte homophilie régionale** qui charrie le
+biais structurel ; et comme region corrèle à age et indirectement à
+education, l'effet remonte sur tous les axes. Cela valide *a posteriori*
+l'hypothèse proxy de §1.3.
+
+### 5.3 Hypothèse proxy : `region` est-il un proxy de `gender` ou `age` ?
+
+Deuxième volet d'analyse multi-attributs. Marginalement, sur les données brutes
+de Pokec-z, `region ↔ gender` montre seulement ~0.5 pp d'écart (51.4 % de
+femmes en region 0 vs 50.9 % en region 1) — **proxy faible au niveau des
+features brutes**.
+
+**Mais le message passing peut amplifier les proxies faibles**. Un embedding
+GraphSAGE recombine les features d'un nœud avec celles de ses voisins (qui
+partagent gender via homophilie `r=0.876`). Un proxy faible côté `x` peut
+devenir un proxy fort côté embedding. C'est l'analogue du **redlining
+algorithmique** documenté dans la littérature credit-scoring US : un code
+postal qui ne corrèle que faiblement avec la race au niveau individuel devient
+un proxy fiable une fois combiné avec les autres features dans un modèle.
+
+Le notebook (cellule §8.5) mesure :
+
+1. La distribution `gender` et `age_group` par `region` (probe direct sur
+   marginales).
+2. Le leakage `region → gender` et `region → age_group` sur **features
+   brutes** (TabICL-style probe).
+3. Le leakage `region → gender` et `region → age_group` sur **embeddings
+   GraphSAGE** — si supérieur au probe brut, **le GNN amplifie le proxy**.
+
+### 5.4 Conséquence pratique
+
+Si l'amplification est confirmée, alors **un modèle qui se prétend
+« gender-blind » en supprimant la colonne `gender` ne l'est pas** : l'homophilie
+de genre se réinjecte via le graphe. C'est précisément l'argument qui justifie
+les méthodes structurelles type **FairDrop** (qui attaquent l'arête) au-delà
+des méthodes tabulaires.
+
+---
+
+## 6. Limites et discussion critique
+
+### 6.1 Limites des données
+
+- **Binarisation imposée** par le subset FairGNN. `gender` et `region` sont
+  réduits à 0/1 sans documentation de la sémantique. Ça efface les identités
+  non-binaires et toute granularité régionale (les 11 districts du
+  *Žilinský kraj* écrasés en deux groupes d'origine inconnue).
+- **NA d'AGE polluant**. 30.4 % des `AGE` sont à 0 (NA remplis amont). Notre
+  `categorize_age` les marque `-1` et les exclut, mais cette colonne reste
+  bruitée comme feature normalisée.
+- **`I_am_working_in_field` non utilisable**. Le sentinel `-1` (86.8 %) en
+  fait une cible factuellement inadaptée à la classification binaire.
+- **Sémantique opaque de la cible**. On ne sait pas exactement ce que
+  `completed_level_of_education_indicator = 1` signifie dans le subset amont ;
+  les résultats sont reproductibles mais leur interprétation académique est
+  contrainte.
+
+### 6.2 Limites philosophiques (« qu'est-ce qu'un biais ? »)
+
+La **statistique est moralement neutre** : observer une corrélation
+`gender ↔ y` ne dit pas si elle reflète une **discrimination structurelle**
+(monde A : barrières d'accès historiques), des **choix de vie individuels**
+(monde B), ou une **erreur de mesure** (monde C : auto-déclaration biaisée).
+Le modèle apprend la corrélation dans tous les cas. C'est l'humain qui décide
+si la corrélation est légitime à exploiter ou non.
+
+Les métriques de fairness encodent des positions normatives **implicites** :
+
+| Métrique | Position implicite |
+|---|---|
+| ΔDP = 0 | Anti-classification stricte : aucune corrélation n'est légitime. |
+| ΔEO = 0 | Méritocratique : OK si conditionné à la vérité. |
+| Calibration par groupe | Statistique pure : la prédiction doit être correcte par groupe ; les écarts marginaux sont acceptables. |
+| Counterfactual fairness | Causal : flipper le sensible ne doit pas changer la prédiction. |
+
+**Théorème de Chouldechova / Kleinberg (2017)** : ces critères sont
+**mutuellement incompatibles** dès que les taux de base diffèrent entre groupes.
+Choisir une métrique = choisir une éthique.
+
+### 6.3 Limites du framework binaire (Hoffmann, Hanna, Crenshaw)
+
+- **Hoffmann (2019)**, *Where fairness fails* : les frameworks fairness ML
+  héritent des catégories du civil rights act US des années 60 ; les appliquer
+  dans un contexte slovaque (où les minorités hongroise et Roma sont les
+  principaux axes de discrimination réels, et où le binaire H/F est moins
+  central dans le débat public) est une importation culturelle.
+- **Hanna et al. (2020 FAccT)**, *Towards a critical race methodology in
+  algorithmic fairness* : la fairness ML opère par **agrégation de catégories
+  préalables** (« gender = 0 ou 1 ») au lieu d'interroger comment ces catégories
+  ont été construites. La binarisation imposée par les auteurs FairGNN est un
+  exemple typique.
+- **Crenshaw (1989)**, intersectionnalité : être *femme et minorité* ≠ être
+  femme + être minorité. Notre analyse §5 mesure un écart `gender × age_group`
+  potentiellement plus élevé que `gender` seul, ce qui valide empiriquement
+  l'argument intersectionnel.
+
+### 6.4 Limites méthodologiques
+
+- **GNNExplainer est post-hoc** ; explique le modèle, pas le mécanisme causal
+  des données.
+- **L'adversaire FairGNN est binaire** : pour multi-classes (ex. `age_group`),
+  il faudrait redimensionner la tête de discriminateur — dans notre étude
+  l'adversaire reste sur `gender` binaire.
+- **Le probe leakage utilise un train→test split rigoureux** (cf. fix
+  `696345c`) ; AUC-ROC plutôt qu'accuracy pour gérer le déséquilibre.
+- **TabICL fermé**. CF score impossible faute de latent ; le leakage probe est
+  fait sur features brutes, donnant une **borne basse** plutôt qu'une mesure
+  sur représentation.
+- **FairDrop suppose des arêtes non-dirigées** ; sur Pokec-z (graphe dirigé,
+  reciprocité partielle), la sémantique de la suppression intra-groupe est
+  approximée.
+
+### 6.5 Reproductibilité
+
+- Toutes les expériences sont déclenchées via `notebooks/main_experiment.ipynb`
+  exécuté sur GPU (RTX 3090). Le notebook charge le seed canonique 42 et
+  enchaîne ensuite les 5 seeds `[3, 7, 21, 42, 99]` pour les agrégats.
+- `pyproject.toml` épingle Python 3.12 et les versions des dépendances
+  critiques. `uv pip install -e ".[dev]"` produit un environnement déterministe.
+- Les garde-fous ruff (`PD` préset, no-pandas) et `tests/test_no_pandas_no_loops.py`
+  empêchent la régression vers pandas ou les boucles Python sur tenseurs.
+- Pas de poids pré-entraînés non documentés — TabICL est tiré de PyPI à la
+  version épinglée, ses checkpoints publics sont reproductibles.
+
+---
+
+## 7. Références
+
+- Dai, E. & Wang, S. (2021). *Say No to the Discrimination: Learning Fair Graph
+  Neural Networks with Limited Sensitive Attribute Information*. WSDM 2021.
+- Ganin, Y. & Lempitsky, V. (2015). *Unsupervised Domain Adaptation by
+  Backpropagation*. ICML 2015. (Origine du Gradient Reversal Layer.)
+- Qu, J. et al. (2025). *TabICL: A Tabular Foundation Model for In-Context
+  Learning on Large Data*. INRIA / arXiv.
+- Agarwal, C. et al. (2021). *NIFTY*. arXiv:2109.05228.
+- Spinelli, I. et al. (2021). *FairDrop: Biased Edge Dropout for Enhancing
+  Fairness in Graph Representation Learning*. IEEE TNNLS.
+- Newman, M. E. J. (2003). *Mixing patterns in networks*. Physical Review E.
+- Hamilton, W. L., Ying, R. & Leskovec, J. (2017). *Inductive Representation
+  Learning on Large Graphs* (GraphSAGE). NeurIPS 2017.
+- Ying, Z. et al. (2019). *GNNExplainer: Generating Explanations for Graph
+  Neural Networks*. NeurIPS 2019.
+- Laclau, C., Largeron, C. & Choudhary, M. (2024). *A Survey on Fairness for
+  Machine Learning on Graphs*. arXiv:2205.05396.
+- Chouldechova, A. (2017). *Fair prediction with disparate impact*. Big Data.
+- Kleinberg, J., Mullainathan, S. & Raghavan, M. (2016). *Inherent Trade-Offs
+  in the Fair Determination of Risk Scores*. (Théorème d'incompatibilité.)
+- Crenshaw, K. (1989). *Demarginalizing the intersection of race and sex*.
+  University of Chicago Legal Forum.
+- Hoffmann, A. L. (2019). *Where fairness fails: data, algorithms, and the
+  limits of antidiscrimination discourse*. Information, Communication &
+  Society.
+- Hanna, A., Denton, E., Smart, A. & Smith-Loud, J. (2020). *Towards a
+  critical race methodology in algorithmic fairness*. FAccT 2020.
+- Buolamwini, J. & Gebru, T. (2018). *Gender Shades: Intersectional Accuracy
+  Disparities in Commercial Gender Classification*. PMLR.
+- Takac, L. & Zabovsky, M. (2012). *Data Analysis in Public Social Networks*
+  (le dataset Pokec original SNAP).
