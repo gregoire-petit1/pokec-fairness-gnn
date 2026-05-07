@@ -528,6 +528,92 @@ biais structurel ; et comme region corrèle à age et indirectement à
 education, l'effet remonte sur tous les axes. Cela valide *a posteriori*
 l'hypothèse proxy de §1.3.
 
+### 5.2.bis Étendre EOT à plusieurs axes — et comparer aux autres familles
+
+Une fois le post-process EOT validé sur `gender`, on l'étend naturellement à
+`age_group` et `region`. On compare aussi avec :
+
+- **DPT** (Demographic Parity Threshold) : même mécanisme que EOT mais
+  calibré pour égaliser le **taux de prédictions positives** au lieu du TPR
+  → attaque directement ΔDP.
+- **Reweighting Kamiran & Calders 2012** : pré-process par pondération des
+  exemples de train (`w_i = P(s)·P(y) / P(s,y)`), généralisable à toute
+  cardinalité de `s` et compatible avec GraphSAGE (la cross-entropy accepte
+  `sample_weights`). Pas applicable à TabICL (modèle gelé).
+
+**ΔDP sur l'axe ciblé** (run seed=42, RTX 3090) :
+
+| Axe | Baseline | EOT | **DPT** | Reweighted |
+|---|---:|---:|---:|---:|
+| **gender** (GraphSAGE)        | 0.0434 | 0.0191 | **0.0075** | 0.0385 |
+| **gender** (TabICL)           | 0.0408 | 0.0071 | **0.0027** | n/a |
+| **age_group** (GraphSAGE)     | 0.0563 | 0.0753 ↑ | **0.0438** | 0.0582 |
+| **age_group** (TabICL)        | 0.0591 | 0.066 ↑ | **0.0547** | n/a |
+| **region** (GraphSAGE)        | 0.0533 | 0.0591 ↑ | **0.0246** | 0.0519 |
+| **region** (TabICL)           | 0.0493 | 0.0565 ↑ | **0.0168** | n/a |
+
+Quatre lectures se dégagent.
+
+**(a) DPT domine systématiquement EOT sur ΔDP**, sur les trois axes. Logique
+par construction : DPT calibre les seuils pour égaliser le taux de
+prédictions positives, exactement la quantité que ΔDP mesure. EOT vise une
+cible orthogonale (TPR), et l'écart entre les deux est précisément ce que
+quantifie le **théorème de Chouldechova-Kleinberg 2017** : on ne peut pas
+satisfaire les deux critères ensemble dès que les taux de base diffèrent
+entre groupes.
+
+**(b) TabICL+DPT@gender = 0.0027** — *absolu* meilleur résultat du
+benchmark sur ΔDP, à F1=0.95 conservé. C'est −94 % vs baseline. Ce résultat
+**confirme et généralise** le finding de §5.1.ter : TabICL + un
+post-process bien choisi est la chaîne la plus simple *et* la plus
+performante sur ce dataset.
+
+**(c) EOT *worsens* ΔDP sur les axes non-binaires ou déséquilibrés** :
++33 % sur `age_group` (3 classes), +11 % sur `region` (binaire mais 71/29).
+Cela illustre concrètement la limite d'EOT « par construction » : le
+critère qu'il optimise (égaliser le TPR) **n'est pas** ΔDP. Pour les axes
+multi-classes ou déséquilibrés, où les bases rates conditionnelles
+divergent fortement, le compromis ΔEO↓ vs ΔDP↑ devient marqué.
+
+**(d) Le Reweighting est faible sur ce dataset** : -11 % sur `gender`,
+neutre ailleurs. La raison est structurelle : Pokec-z a `gender` quasiment
+équilibré (51/49) et `age_group` modérément déséquilibré, donc les poids
+de Kamiran-Calders sont déjà proches de 1.0 — la méthode n'a presque rien
+à corriger. Sur des datasets fortement déséquilibrés (Adult, COMPAS,
+German Credit) la même méthode donne typiquement -50 % à -70 % sur ΔDP.
+Notre run **discrédite le KC en général ? non — il discrédite le KC pour
+*ce* dataset spécifique**. Argument à formuler explicitement dans la note.
+
+**Trade-off ΔDP ↔ ΔEO sur l'axe `age_group`** (Chouldechova-Kleinberg en
+direct) :
+
+| Méthode | ΔDP | ΔEO |
+|---|---:|---:|
+| Baseline | 0.056 | 0.039 |
+| EOT@age_group | 0.075 ↑ | 0.034 ↓ |
+| **DPT@age_group** | **0.044** ↓ | **0.074** ↑ |
+
+DPT divise ΔDP par 1.3 *mais double ΔEO*. EOT fait l'inverse. **Aucune
+des deux méthodes** ne peut atteindre les deux à zéro simultanément :
+c'est l'incompatibilité formelle. Le choix entre les deux est une
+**décision normative**, pas une question algorithmique.
+
+#### Synthèse compétitive après lever 1 + lever 2
+
+Le tableau de couverture de §5.1.ter, mis à jour :
+
+| Métrique attaquée | EOT | **DPT** | Reweighting | INLP (à venir) |
+|---|---|---|---|---|
+| ΔDP | partiel | ✅ par construction | partiel | ✅ effet indirect |
+| ΔEO | ✅ par construction | partiel | ✅ par construction | partiel |
+| Leakage | ❌ | ❌ | partiel | ✅ par construction |
+| Multi-classes | ✅ | ✅ | ✅ | ✅ |
+| Coût | 5 s | 5 s | retraining | retraining |
+
+**Sur Pokec-z, sur ΔDP, le winner toutes catégories est : TabICL+DPT@gender.**
+
+---
+
 ### 5.3 Hypothèse proxy : `region` est-il un proxy de `gender` ou `age` ?
 
 Deuxième volet d'analyse multi-attributs. Marginalement, sur les données brutes
