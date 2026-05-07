@@ -43,3 +43,6 @@ data/splits/
 /enonce.pdf
 /2205.05396v2.pdf
 /soc-pokec-readme.txt
+
+# Cached trained ModelOutputs — see scripts/main_experiment.py docstring
+results/cache/

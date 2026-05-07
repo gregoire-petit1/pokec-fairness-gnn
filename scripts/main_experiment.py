@@ -26,7 +26,9 @@ from __future__ import annotations
 
 import argparse
 import random
+import re
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -177,6 +179,100 @@ class ModelOutput:
     proba: np.ndarray | None
     embeddings: torch.Tensor | None
     extra: dict[str, Any]
+
+
+# ---------------------------------------------------------------------------
+# Disk cache for ModelOutput
+# ---------------------------------------------------------------------------
+#
+# Training the 6 underlying models (1 baseline + 1 resampling + 1 fairdrop +
+# 4 fairgnn-grid + 1 tabicl) takes ~5 min on a single RTX 3090. None of the
+# downstream operations (multi-attribute fairness, post-process EOT,
+# threshold sweeps) require retraining: they only consume ``ModelOutput``
+# fields (proba_test, proba_val, embeddings, predictions). We therefore cache
+# every freshly-trained ModelOutput to disk; subsequent runs reuse them and
+# only re-execute the cheap parts.
+#
+# Cache layout (default ``results/cache/``):
+#
+#     results/cache/
+#       └── seed42/
+#           ├── GraphSAGE.pt
+#           ├── GraphSAGE_Resampling.pt
+#           ├── GraphSAGE_FairDrop.pt
+#           ├── FairGNN_lambda_5.0.pt
+#           └── TabICL.pt
+#
+# When the user changes hyperparameters or the data, they should pass
+# ``--no-cache`` (forces retrain) or delete the cache directory.
+
+
+def _safe_filename(name: str) -> str:
+    """Slugify a model name for use as a filesystem path component."""
+    return re.sub(r"[^\w.\-]+", "_", name)
+
+
+def _output_cache_path(cache_dir: Path, seed: int, model_name: str) -> Path:
+    return cache_dir / f"seed{seed}" / f"{_safe_filename(model_name)}.pt"
+
+
+def _save_model_output(out: ModelOutput, path: Path) -> None:
+    """Serialise a :class:`ModelOutput` to ``path`` using ``torch.save``."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    state = {
+        "name": out.name,
+        "acc": out.acc,
+        "f1": out.f1,
+        "pred": out.pred.detach().cpu(),
+        "proba": out.proba,  # numpy
+        "embeddings": (
+            out.embeddings.detach().cpu() if out.embeddings is not None else None
+        ),
+        "extra": out.extra,  # dict; numpy arrays inside are pickled by torch.save
+    }
+    torch.save(state, path)
+
+
+def _load_model_output(path: Path, device: torch.device) -> ModelOutput:
+    """Inverse of :func:`_save_model_output`: tensors restored on ``device``."""
+    state = torch.load(path, weights_only=False, map_location=device)
+    pred = state["pred"].to(device)
+    embeddings = (
+        state["embeddings"].to(device) if state["embeddings"] is not None else None
+    )
+    return ModelOutput(
+        name=state["name"],
+        acc=state["acc"],
+        f1=state["f1"],
+        pred=pred,
+        proba=state["proba"],
+        embeddings=embeddings,
+        extra=state["extra"],
+    )
+
+
+def _cached_run(
+    fn: Callable[[], ModelOutput],
+    cache_dir: Path | None,
+    seed: int,
+    model_name: str,
+    device: torch.device,
+) -> ModelOutput:
+    """Run ``fn`` (a no-arg closure that trains the model) with an on-disk cache.
+
+    If the cache file exists, the trained ``ModelOutput`` is loaded from disk
+    and ``fn`` is NOT called. Otherwise ``fn`` runs, its result is saved, and
+    returned. ``cache_dir=None`` disables the cache and always calls ``fn``.
+    """
+    if cache_dir is None:
+        return fn()
+    path = _output_cache_path(cache_dir, seed, model_name)
+    if path.exists():
+        print(f"      [cache hit] {path.name}")
+        return _load_model_output(path, device)
+    out = fn()
+    _save_model_output(out, path)
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -572,14 +668,22 @@ def run_all(
     raw_dir_override: str | None = None,
     out_csv: str | Path = "results/metrics/comparison_full.csv",
     skip_tabicl: bool = False,
+    cache_dir: str | Path | None = "results/cache",
 ) -> pl.DataFrame:
-    """Run every method, evaluate on every sensitive attribute, write CSV."""
+    """Run every method, evaluate on every sensitive attribute, write CSV.
+
+    Trained ``ModelOutput`` objects are cached on disk under ``cache_dir`` so
+    re-running with only post-process changes (e.g. new EOT axes) skips the
+    expensive training step. Pass ``cache_dir=None`` to force full retrain.
+    """
     cfg = ExperimentConfig.from_yaml(cfg_path)
     device = torch.device(device_str)
     raw_dir = raw_dir_override or cfg.raw_dir
+    cache_path = Path(cache_dir) if cache_dir is not None else None
     setup_seeds(seed)
 
-    print(f"[setup] device={device} | seed={seed} | raw_dir={raw_dir}")
+    cache_msg = f"cache={cache_path}" if cache_path else "cache=disabled"
+    print(f"[setup] device={device} | seed={seed} | raw_dir={raw_dir} | {cache_msg}")
     data = load_data(raw_dir, cfg.sensitive_cols, device)
     train_idx, val_idx, test_idx = make_splits(
         data.num_nodes,
@@ -601,29 +705,59 @@ def run_all(
     all_dfs: list[pl.DataFrame] = []
 
     print("[1/5] baseline GraphSAGE …")
-    base_out = run_baseline(data, train_mask, val_mask, test_mask, cfg, seed)
+    base_out = _cached_run(
+        lambda: run_baseline(data, train_mask, val_mask, test_mask, cfg, seed),
+        cache_path,
+        seed,
+        "GraphSAGE",
+        device,
+    )
     print(f"      acc={base_out.acc:.4f}  f1={base_out.f1:.4f}")
     all_dfs.append(
         compute_multi_attr_fairness(base_out, data, sensitive_attrs, train_mask, test_mask, seed)
     )
 
     print("[2/5] resampling + GraphSAGE …")
-    rs_out = run_resampling(data, train_mask, val_mask, test_mask, cfg, seed)
+    rs_out = _cached_run(
+        lambda: run_resampling(data, train_mask, val_mask, test_mask, cfg, seed),
+        cache_path,
+        seed,
+        "GraphSAGE+Resampling",
+        device,
+    )
     print(f"      acc={rs_out.acc:.4f}  f1={rs_out.f1:.4f}")
     all_dfs.append(
         compute_multi_attr_fairness(rs_out, data, sensitive_attrs, train_mask, test_mask, seed)
     )
 
     print("[3/5] FairDrop + GraphSAGE …")
-    fd_out = run_fairdrop(data, train_mask, val_mask, test_mask, cfg, seed)
+    fd_out = _cached_run(
+        lambda: run_fairdrop(data, train_mask, val_mask, test_mask, cfg, seed),
+        cache_path,
+        seed,
+        "GraphSAGE+FairDrop",
+        device,
+    )
     print(f"      acc={fd_out.acc:.4f}  f1={fd_out.f1:.4f}")
     all_dfs.append(
         compute_multi_attr_fairness(fd_out, data, sensitive_attrs, train_mask, test_mask, seed)
     )
 
     print("[4/5] FairGNN λ-grid (GRL) …")
-    fg_out, fg_grid = run_fairgnn_grid(data, train_mask, val_mask, test_mask, cfg, seed)
-    print(f"      grid: {fg_grid}")
+
+    def _run_fairgnn_unwrapped() -> ModelOutput:
+        out, grid = run_fairgnn_grid(data, train_mask, val_mask, test_mask, cfg, seed)
+        out.extra["grid"] = grid  # already there but explicit for cache reload
+        return out
+
+    fg_out = _cached_run(
+        _run_fairgnn_unwrapped,
+        cache_path,
+        seed,
+        "FairGNN_grid",
+        device,
+    )
+    print(f"      grid: {fg_out.extra.get('grid')}")
     print(
         f"      best λ={fg_out.extra.get('chosen_lambda')}  acc={fg_out.acc:.4f}  f1={fg_out.f1:.4f}"
     )
@@ -633,7 +767,13 @@ def run_all(
 
     if not skip_tabicl:
         print("[5/5] TabICL (no graph) …")
-        tab_out = run_tabicl(data, train_mask, val_mask, test_mask, cfg, seed)
+        tab_out = _cached_run(
+            lambda: run_tabicl(data, train_mask, val_mask, test_mask, cfg, seed),
+            cache_path,
+            seed,
+            "TabICL",
+            device,
+        )
         print(f"      acc={tab_out.acc:.4f}  f1={tab_out.f1:.4f}")
         all_dfs.append(
             compute_multi_attr_fairness(tab_out, data, sensitive_attrs, train_mask, test_mask, seed)
@@ -642,25 +782,41 @@ def run_all(
         print("[5/5] TabICL skipped.")
         tab_out = None
 
-    # ---- Post-process variants (Hardt et al. 2016) on the two endpoints ------
-    print("[6] post-process Equal-Opportunity threshold @ gender …")
-    base_eot = apply_equal_opportunity_threshold(
-        base_out, data, val_mask, test_mask, sensitive_name="gender"
-    )
-    print(f"      [GraphSAGE+EOT@gender] acc={base_eot.acc:.4f}  f1={base_eot.f1:.4f}")
-    all_dfs.append(
-        compute_multi_attr_fairness(base_eot, data, sensitive_attrs, train_mask, test_mask, seed)
-    )
-    if tab_out is not None:
-        tab_eot = apply_equal_opportunity_threshold(
-            tab_out, data, val_mask, test_mask, sensitive_name="gender"
+    # ---- Post-process variants (Hardt et al. 2016) on multiple sensitive axes ----
+    # Unlike FairGNN — which is structurally tied to a single binary sensitive
+    # attribute via its adversary head — Hardt-style threshold post-processing
+    # scales to any categorical attribute by computing one threshold per group.
+    # We apply it on the two endpoint models (GraphSAGE = graph baseline,
+    # TabICL = no-graph baseline) across three sensitive axes:
+    #   * gender (binary, 2 groups)
+    #   * age_group (multi-class, 3 groups: young/adult/senior)
+    #   * region (binary, 2 groups; semantics inherited from FairGNN preprocessing)
+    print("[6] post-process Equal-Opportunity threshold (multi-axis) …")
+    eot_axes = ("gender", "age_group", "region")
+    for axis in eot_axes:
+        base_eot = apply_equal_opportunity_threshold(
+            base_out, data, val_mask, test_mask, sensitive_name=axis
         )
-        print(f"      [TabICL+EOT@gender]    acc={tab_eot.acc:.4f}  f1={tab_eot.f1:.4f}")
+        print(
+            f"      [GraphSAGE+EOT@{axis:<10s}] acc={base_eot.acc:.4f}  f1={base_eot.f1:.4f}"
+        )
         all_dfs.append(
             compute_multi_attr_fairness(
-                tab_eot, data, sensitive_attrs, train_mask, test_mask, seed
+                base_eot, data, sensitive_attrs, train_mask, test_mask, seed
             )
         )
+        if tab_out is not None:
+            tab_eot = apply_equal_opportunity_threshold(
+                tab_out, data, val_mask, test_mask, sensitive_name=axis
+            )
+            print(
+                f"      [TabICL+EOT@{axis:<10s}]   acc={tab_eot.acc:.4f}  f1={tab_eot.f1:.4f}"
+            )
+            all_dfs.append(
+                compute_multi_attr_fairness(
+                    tab_eot, data, sensitive_attrs, train_mask, test_mask, seed
+                )
+            )
 
     df = pl.concat(all_dfs, how="diagonal_relaxed")
     out_path = Path(out_csv)
@@ -689,7 +845,34 @@ def main() -> None:
         default=str(_REPO_ROOT / "results" / "metrics" / "comparison_full.csv"),
     )
     parser.add_argument("--skip-tabicl", action="store_true")
+    parser.add_argument(
+        "--cache",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Enable on-disk cache for trained ModelOutputs (default: enabled). "
+            "Use --no-cache to force a full retrain. Cache lives under --cache-dir."
+        ),
+    )
+    parser.add_argument(
+        "--cache-dir",
+        default=str(_REPO_ROOT / "results" / "cache"),
+        help="Directory holding cached ModelOutput .pt files (default: results/cache).",
+    )
+    parser.add_argument(
+        "--clear-cache",
+        action="store_true",
+        help="Delete cache files for the current --seed before running.",
+    )
     args = parser.parse_args()
+
+    cache_dir = Path(args.cache_dir) if args.cache else None
+    if args.clear_cache and cache_dir is not None:
+        seed_dir = cache_dir / f"seed{args.seed}"
+        if seed_dir.exists():
+            for f in seed_dir.glob("*.pt"):
+                f.unlink()
+            print(f"[clear-cache] removed cache files in {seed_dir}")
 
     df = run_all(
         seed=args.seed,
@@ -698,6 +881,7 @@ def main() -> None:
         raw_dir_override=args.raw_dir,
         out_csv=args.out_csv,
         skip_tabicl=args.skip_tabicl,
+        cache_dir=cache_dir,
     )
     print(df)
     sys.exit(0)
