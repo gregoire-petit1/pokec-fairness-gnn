@@ -25,9 +25,7 @@ Calibration criteria implemented:
 from __future__ import annotations
 
 import numpy as np
-import torch
 from sklearn.metrics import f1_score
-
 
 # ── helpers ────────────────────────────────────────────────────────────────
 
