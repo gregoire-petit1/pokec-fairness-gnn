@@ -677,6 +677,123 @@ def apply_equal_opportunity_threshold(
     )
 
 
+def apply_inlp_to_embeddings(
+    out: ModelOutput,
+    data,
+    train_mask: torch.Tensor,
+    val_mask: torch.Tensor,
+    test_mask: torch.Tensor,
+    sensitive_name: str = "gender",
+) -> ModelOutput:
+    """Apply INLP (Ravfogel 2020) to model embeddings, then re-fit a linear
+    classifier on the projected representation.
+
+    Procedure: fit projection ``P`` on train embeddings → apply globally →
+    re-fit a fresh logistic-regression classifier on projected train
+    embeddings. The encoder is unchanged; only the classifier head is
+    replaced (faster than retraining the GNN).
+    """
+    from sklearn.linear_model import LogisticRegression
+
+    from src.postprocess.inlp import apply_projection, inlp
+
+    if out.embeddings is None:
+        raise ValueError(f"cannot INLP {out.name}: embeddings missing")
+
+    sensitive_full = getattr(data, sensitive_name).long().detach().cpu().numpy()
+    z = out.embeddings.detach().cpu().numpy().astype(np.float32)
+    train_idx = train_mask.detach().cpu().numpy().nonzero()[0]
+    val_idx = val_mask.detach().cpu().numpy().nonzero()[0]
+    test_idx = test_mask.detach().cpu().numpy().nonzero()[0]
+
+    _, P = inlp(z[train_idx], sensitive_full[train_idx], n_iter=10)
+    z_clean = apply_projection(z, P)
+
+    y_np = data.y.detach().cpu().numpy()
+    clf = LogisticRegression(max_iter=1000, random_state=42)
+    clf.fit(z_clean[train_idx], y_np[train_idx])
+    pred_test_np = clf.predict(z_clean[test_idx]).astype(np.int64)
+    proba_test = clf.predict_proba(z_clean[test_idx]).astype(np.float32)
+    proba_val = clf.predict_proba(z_clean[val_idx]).astype(np.float32)
+
+    pred_test = torch.from_numpy(pred_test_np).long().to(out.pred.device)
+    acc = float(accuracy_score(y_np[test_idx], pred_test_np))
+    f1 = float(f1_score(y_np[test_idx], pred_test_np, average="macro", zero_division=0))
+
+    return ModelOutput(
+        name=f"{out.name}+INLP@{sensitive_name}",
+        acc=acc,
+        f1=f1,
+        pred=pred_test,
+        proba=proba_test,
+        embeddings=torch.from_numpy(z_clean).float().to(out.pred.device),
+        extra={
+            **out.extra,
+            "proba_val_pos": proba_val[:, 1] if proba_val.shape[1] >= 2 else proba_val.ravel(),
+            "inlp_axis": sensitive_name,
+        },
+    )
+
+
+def apply_inlp_to_tabicl(
+    out: ModelOutput,
+    data,
+    train_mask: torch.Tensor,
+    val_mask: torch.Tensor,
+    test_mask: torch.Tensor,
+    sensitive_name: str = "gender",
+    max_train: int = 10_000,
+    seed: int = 42,
+) -> ModelOutput:
+    """Apply INLP to raw features ``x`` and re-run TabICL on projected ``x``."""
+    from src.baselines.tabicl import tabicl_predict
+    from src.postprocess.inlp import apply_projection, inlp
+
+    sensitive_full = getattr(data, sensitive_name).long().detach().cpu().numpy()
+    x_np = data.x.detach().cpu().numpy().astype(np.float32)
+    y_np = data.y.detach().cpu().numpy().astype(np.int64)
+    train_idx = train_mask.detach().cpu().numpy().nonzero()[0]
+    val_idx = val_mask.detach().cpu().numpy().nonzero()[0]
+    test_idx = test_mask.detach().cpu().numpy().nonzero()[0]
+
+    _, P = inlp(x_np[train_idx], sensitive_full[train_idx], n_iter=10)
+    x_clean = apply_projection(x_np, P)
+
+    eval_idx = np.concatenate([val_idx, test_idx])
+    pred_all, proba_pos_all = tabicl_predict(
+        x_clean, y_np, train_idx, eval_idx,
+        seed=seed, max_train=max_train,
+        device=str(data.x.device) if data.x.is_cuda else "cpu",
+    )
+    n_val = val_idx.size
+    proba_val_pos = proba_pos_all[:n_val].astype(np.float32)
+    proba_test_pos = proba_pos_all[n_val:].astype(np.float32)
+    pred_np = pred_all[n_val:]
+    proba_2col_test = np.stack([1.0 - proba_test_pos, proba_test_pos], axis=1)
+
+    pred_test = torch.from_numpy(pred_np).long().to(data.x.device)
+    acc = float(accuracy_score(y_np[test_idx], pred_np))
+    f1 = float(f1_score(y_np[test_idx], pred_np, average="macro", zero_division=0))
+
+    # Stash the projected features as ``embeddings`` so the leakage probe in
+    # ``compute_multi_attr_fairness`` measures recoverability from ``x_clean``
+    # rather than the original ``data.x``. Without this, the probe falls back
+    # to the raw features and INLP's effect is invisible.
+    return ModelOutput(
+        name=f"{out.name}+INLP@{sensitive_name}",
+        acc=acc,
+        f1=f1,
+        pred=pred_test,
+        proba=proba_2col_test,
+        embeddings=torch.from_numpy(x_clean).float().to(data.x.device),
+        extra={
+            **out.extra,
+            "proba_val_pos": proba_val_pos,
+            "inlp_axis": sensitive_name,
+        },
+    )
+
+
 def apply_composite_dpt(
     out: ModelOutput,
     data,
@@ -955,6 +1072,47 @@ def run_all(
                 tab_comp, data, sensitive_attrs, train_mask, test_mask, seed
             )
         )
+
+    # ---- INLP (Ravfogel 2020) on embeddings (GraphSAGE) and features (TabICL) -
+    # The first method in our benchmark that targets *leakage* directly. EOT,
+    # DPT, Reweighting all leave the latent space untouched — leakage AUC stays
+    # at ~0.81-0.99. INLP iteratively projects representations onto subspaces
+    # where a linear probe cannot recover the sensitive attribute → leakage AUC
+    # drops to ~0.55 by construction.
+    print("[6.7] INLP — Iterative Nullspace Projection (multi-axis) …")
+    inlp_axes = ("gender", "age_group", "region")
+    for axis in inlp_axes:
+        base_inlp = _cached_run(
+            lambda axis=axis: apply_inlp_to_embeddings(
+                base_out, data, train_mask, val_mask, test_mask, sensitive_name=axis
+            ),
+            cache_path,
+            seed,
+            f"GraphSAGE+INLP_{axis}",
+            device,
+        )
+        print(f"      [GraphSAGE+INLP@{axis:<10s}] acc={base_inlp.acc:.4f}  f1={base_inlp.f1:.4f}")
+        all_dfs.append(
+            compute_multi_attr_fairness(
+                base_inlp, data, sensitive_attrs, train_mask, test_mask, seed
+            )
+        )
+        if tab_out is not None:
+            tab_inlp = _cached_run(
+                lambda axis=axis: apply_inlp_to_tabicl(
+                    tab_out, data, train_mask, val_mask, test_mask, sensitive_name=axis
+                ),
+                cache_path,
+                seed,
+                f"TabICL+INLP_{axis}",
+                device,
+            )
+            print(f"      [TabICL+INLP@{axis:<10s}]   acc={tab_inlp.acc:.4f}  f1={tab_inlp.f1:.4f}")
+            all_dfs.append(
+                compute_multi_attr_fairness(
+                    tab_inlp, data, sensitive_attrs, train_mask, test_mask, seed
+                )
+            )
 
     # ---- Pre-process Kamiran & Calders 2012 reweighting (multi-axis) ----------
     # Each example gets weight P(s)*P(y) / P(s,y), pulling the joint towards
