@@ -816,11 +816,51 @@ sur l'axe gender.
 ne s'applique pas entre elles (il s'applique aux conflits ΔDP↔ΔEO sur la
 même sortie). On peut donc les composer sans perte.
 
+### La même chaîne, étendue aux 3 axes
+
+Comme pour DPT seul, le killer combo se généralise naturellement aux trois
+axes simples. Pour chaque axe `s`, la chaîne `INLP@s + DPT@s` réduit
+simultanément ΔDP(s) **et** Leakage(s) :
+
+| Axe | Méthode (TabICL+INLP+DPT) | ΔDP | Leakage | F1 |
+|---|---|---:|---:|---:|
+| **gender** | @gender    | **0.0009** (−98 %) | 0.712 (−19 %) | 0.943 |
+| **age_group** | @age_group | 0.0409 (−31 %) | **0.538** (−46 %) | 0.933 |
+| **region** | @region    | 0.0192 (−64 %) | 0.557 (−10 %) | 0.943 |
+
+Sur GraphSAGE+INLP+DPT, mêmes ordres de grandeur :
+
+| Axe | ΔDP | Leakage | F1 |
+|---|---:|---:|---:|
+| gender    | 0.0032 (−93 %) | 0.573 (−29 %) | 0.932 |
+| age_group | 0.0459 (−18 %) | 0.526 (−41 %) | 0.929 |
+| region    | 0.0200 (−62 %) | 0.524 (−18 %) | 0.932 |
+
+**Trois lectures complètes les unes des autres** :
+
+1. **TabICL+INLP+DPT** est dominant sur `gender` (le cas où la calibration
+   est la plus précise) et `region` (binaire bien défini) — F1 conservé,
+   ΔDP quasi-nul, leakage réduit.
+2. **age_group** est le cas le plus dur : DPT en multi-class (3 cellules)
+   réduit ΔDP de 30 % seulement (vs 60-98 % sur les binaires) parce que la
+   calibration discrète sur 3 cellules a plus de bruit ; mais le leakage
+   chute de 46 % grâce à INLP.
+3. **L'écart F1 GraphSAGE vs TabICL** persiste : TabICL+INLP+DPT garde
+   F1=0.94 ; GraphSAGE+INLP+DPT descend à F1=0.93. Cohérent avec le
+   finding précédent (le graphe n'apporte rien à la perf sur cette cible).
+
+**Pas de free-lunch sur intersectionnel** : les axes croisés `gender × age`
+et `gender × region` restent élevés (~0.07-0.10) sur tous les killer
+combos — le phénomène whack-a-mole intersectionnel persiste, **comme prévu**
+puisqu'aucune méthode ne calibre simultanément sur les deux axes joints.
+
 **Limites de la composition** :
 
-- **Mono-axe** : la chaîne ne couvre que `gender`. Pour `age_group` ou
-  `region`, il faudrait soit refaire la chaîne par axe, soit composer
-  INLP séquentiellement sur les 3 axes puis appliquer DPT composite.
+- **Mono-axe par chaîne** : chaque combo cible UN axe. Pour couvrir tous
+  les axes simultanément, il faudrait soit composer INLP séquentiel sur
+  les 3 axes (étape latent : intersection des null-spaces), soit passer
+  par DPT_composite (étape sortie : 12 cellules), ou combiner les deux —
+  non implémenté.
 - **Pré-traitement implicite côté TabICL** : INLP sur `x` modifie l'entrée
   du modèle. Conceptuellement assimilable à du pré-traitement (cf. §6).
 - **Gain de leakage borné par INLP** : on passe de 0.88 à 0.71 sur gender,

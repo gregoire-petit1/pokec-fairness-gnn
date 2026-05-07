@@ -1114,36 +1114,61 @@ def run_all(
                 )
             )
 
-    # ---- Killer combo: INLP + DPT on TabICL (latent + output simultaneously) -
+    # ---- Killer combo: INLP + DPT (latent + output simultaneously) -----------
     # INLP cleans the latent (leakage AUC → ~0.55).
     # DPT then calibrates the threshold on the cleaned classifier (ΔDP → ~0).
     # The two operate on orthogonal dimensions: composing them gives the only
     # chain in the benchmark that addresses BOTH leakage and ΔDP without any
-    # retraining of the foundation model itself.
-    if tab_out is not None:
-        print("[6.8] killer combo: TabICL+INLP+DPT@gender …")
-        tab_inlp = _cached_run(
-            lambda: apply_inlp_to_tabicl(
-                tab_out, data, train_mask, val_mask, test_mask, sensitive_name="gender"
+    # retraining of the foundation model itself. Applied on the 3 single
+    # axes (gender, age_group, region) for both endpoint models.
+    print("[6.8] killer combo: INLP+DPT (multi-axis × 2 models) …")
+    for axis in inlp_axes:
+        # GraphSAGE+INLP+DPT@axis
+        gs_inlp = _cached_run(
+            lambda axis=axis: apply_inlp_to_embeddings(
+                base_out, data, train_mask, val_mask, test_mask, sensitive_name=axis
             ),
             cache_path,
             seed,
-            "TabICL+INLP_gender",
+            f"GraphSAGE+INLP_{axis}",
             device,
         )
-        tab_inlp_dpt = apply_equal_opportunity_threshold(
-            tab_inlp, data, val_mask, test_mask,
-            sensitive_name="gender", strategy="demographic_parity",
-            name_override="TabICL+INLP+DPT@gender",
+        gs_inlp_dpt = apply_equal_opportunity_threshold(
+            gs_inlp, data, val_mask, test_mask,
+            sensitive_name=axis, strategy="demographic_parity",
+            name_override=f"GraphSAGE+INLP+DPT@{axis}",
         )
         print(
-            f"      [TabICL+INLP+DPT@gender] acc={tab_inlp_dpt.acc:.4f}  f1={tab_inlp_dpt.f1:.4f}"
+            f"      [GraphSAGE+INLP+DPT@{axis:<10s}] acc={gs_inlp_dpt.acc:.4f}  f1={gs_inlp_dpt.f1:.4f}"
         )
         all_dfs.append(
             compute_multi_attr_fairness(
-                tab_inlp_dpt, data, sensitive_attrs, train_mask, test_mask, seed
+                gs_inlp_dpt, data, sensitive_attrs, train_mask, test_mask, seed
             )
         )
+        if tab_out is not None:
+            tab_inlp = _cached_run(
+                lambda axis=axis: apply_inlp_to_tabicl(
+                    tab_out, data, train_mask, val_mask, test_mask, sensitive_name=axis
+                ),
+                cache_path,
+                seed,
+                f"TabICL+INLP_{axis}",
+                device,
+            )
+            tab_inlp_dpt = apply_equal_opportunity_threshold(
+                tab_inlp, data, val_mask, test_mask,
+                sensitive_name=axis, strategy="demographic_parity",
+                name_override=f"TabICL+INLP+DPT@{axis}",
+            )
+            print(
+                f"      [TabICL+INLP+DPT@{axis:<10s}]   acc={tab_inlp_dpt.acc:.4f}  f1={tab_inlp_dpt.f1:.4f}"
+            )
+            all_dfs.append(
+                compute_multi_attr_fairness(
+                    tab_inlp_dpt, data, sensitive_attrs, train_mask, test_mask, seed
+                )
+            )
 
     # ---- Pre-process Kamiran & Calders 2012 reweighting (multi-axis) ----------
     # Each example gets weight P(s)*P(y) / P(s,y), pulling the joint towards
