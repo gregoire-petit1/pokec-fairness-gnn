@@ -730,6 +730,108 @@ Trois pistes d'amélioration non implémentées :
 
 ---
 
+### 5.2.quater INLP — attaquer le leakage (Ravfogel 2020)
+
+EOT, DPT, Reweighting et le composite DPT laissent tous le **leakage AUC**
+inchangé : ils opèrent sur la sortie ou sur les poids d'entraînement, pas
+sur la **représentation latente** que le modèle expose. Pour faire baisser
+le leakage il faut une méthode qui agisse au niveau des embeddings (ou des
+features pour TabICL) — c'est **INLP** (Iterative Nullspace Projection,
+Ravfogel et al. 2020 ACL).
+
+**Idée** : entraîner itérativement un probe linéaire pour prédire `s` depuis
+`z`, récupérer son vecteur de poids `w`, projeter `z` sur le sous-espace
+orthogonal à `w`, recommencer ~10 fois jusqu'à ce que le probe atteigne
+chance level. Le résultat : `s` n'est plus récupérable par un classifieur
+linéaire depuis `z`.
+
+**Application** :
+
+- **GraphSAGE+INLP@axis** : on prend les embeddings (256-dim) du GraphSAGE
+  déjà entraîné, on les projette via INLP fitté sur train, on **re-fit
+  un classifieur LR** sur les embeddings projetés. Le GNN n'est pas
+  retraîné — seule la tête de classification est remplacée.
+- **TabICL+INLP@axis** : on projette les **features brutes** `x` (264-dim)
+  via INLP fitté sur train, on re-fit TabICL sur `x_clean`. Application
+  *avant* le modèle, donc techniquement assimilable à du pré-traitement
+  — limite philosophique discutée en §6.
+
+**Résultats — leakage AUC sur l'axe ciblé** (run seed=42, RTX 3090) :
+
+| Modèle              | Avant INLP | Après INLP | Réduction |
+|---------------------|-----------:|-----------:|----------:|
+| GraphSAGE @gender   |     0.812  |   **0.573**| −29 % |
+| GraphSAGE @age_group|     0.890  |   **0.526**| −41 % (≈ chance) |
+| GraphSAGE @region   |     0.641  |   **0.524**| −18 % (≈ chance) |
+| TabICL @gender      |     0.882  |   **0.712**| −19 % |
+| TabICL @age_group   |     0.992  |   **0.538**| −46 % (≈ chance) |
+| TabICL @region      |     0.621  |   **0.557**| −10 % |
+
+**F1 cost** : entre −0.5 et −1.2 pp selon le modèle et l'axe — minime.
+
+**ΔDP inchangé** : INLP attaque le **latent**, pas la **sortie**. ΔDP gender
+reste à ~0.04 sur GraphSAGE+INLP. C'est le comportement attendu et **c'est
+ce qui motive la composition** ci-dessous.
+
+**Limite linéaire** : INLP garantit l'invariance contre un probe **linéaire**.
+Un probe non-linéaire (MLP, kernel) peut récupérer du signal résiduel.
+Notre métrique de leakage utilise un probe LR, donc elle bouge bien — mais
+ce n'est pas « zéro information » au sens de Shannon.
+
+---
+
+### 5.2.quinquies La chaîne complète : `TabICL + INLP + DPT@gender`
+
+Composer les deux post-processes orthogonaux donne la chaîne **post-hoc
+complète** (latent + sortie) sans aucun retraining du foundation model :
+
+```
+   TabICL (foundation, frozen)
+        │
+        ▼   x → x_clean    (INLP@gender — leakage gender → 0.71)
+   x_clean
+        │
+        ▼   re-fit TabICL on x_clean
+   proba_clean
+        │
+        ▼   per-group threshold    (DPT@gender — ΔDP → 0.001)
+   ŷ_fair
+```
+
+**Chiffres finaux** (axe gender) :
+
+| Méthode                       | ΔDP gender | Leakage gender | F1 |
+|-------------------------------|-----------:|---------------:|---:|
+| TabICL baseline               |     0.041  |       0.882    | 0.948 |
+| TabICL+DPT@gender             |     0.003  |       0.882    | 0.946 |
+| TabICL+INLP@gender            |     0.037  |       0.712    | 0.946 |
+| **TabICL+INLP+DPT@gender** ★  |  **0.0009**|     **0.712**  | **0.943** |
+
+→ ΔDP **réduit de 98 %**, leakage **réduit de 19 %**, F1 **maintenu** à
+0.94 (vs 0.95 baseline). C'est la chaîne **Pareto-optimale du benchmark**
+sur l'axe gender.
+
+**Pourquoi ça marche** : INLP et DPT agissent sur des dimensions
+**orthogonales** (latent vs sortie). Le théorème de Chouldechova-Kleinberg
+ne s'applique pas entre elles (il s'applique aux conflits ΔDP↔ΔEO sur la
+même sortie). On peut donc les composer sans perte.
+
+**Limites de la composition** :
+
+- **Mono-axe** : la chaîne ne couvre que `gender`. Pour `age_group` ou
+  `region`, il faudrait soit refaire la chaîne par axe, soit composer
+  INLP séquentiellement sur les 3 axes puis appliquer DPT composite.
+- **Pré-traitement implicite côté TabICL** : INLP sur `x` modifie l'entrée
+  du modèle. Conceptuellement assimilable à du pré-traitement (cf. §6).
+- **Gain de leakage borné par INLP** : on passe de 0.88 à 0.71 sur gender,
+  mais pas à 0.55. Pourquoi ? TabICL est un foundation model ; sa
+  représentation interne est non-linéaire et reconstruit partiellement le
+  signal projeté linéairement dans `x`. Pour atteindre 0.55, il faudrait
+  appliquer INLP sur les **représentations internes** de TabICL — non
+  exposé par l'API actuelle.
+
+---
+
 ### 5.3 Hypothèse proxy : `region` est-il un proxy de `gender` ou `age` ?
 
 Deuxième volet d'analyse multi-attributs. Marginalement, sur les données brutes
