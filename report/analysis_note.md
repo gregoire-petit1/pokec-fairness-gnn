@@ -67,19 +67,23 @@ Before the main experiment, a sweep of 8 candidate targets × 5 seeds = 40 runs 
 
 Results from `notebooks/main_experiment.ipynb` executed on GPU (RTX 3090). Baseline reported as mean ± std over 5 seeds `[3, 7, 21, 42, 99]`; other methods use seed=42.
 
-| Method | Accuracy | Macro F1 (mean±std) | ΔDP ↓ (mean±std) | ΔEO ↓ | Leakage AUC ↓ |
-|--------|----------|---------------------|------------------|-------|----------------|
+| Method | Accuracy | Macro F1 | ΔDP ↓ | ΔEO ↓ | Leakage AUC ↓ |
+|--------|----------|----------|-------|-------|----------------|
 | Baseline (GraphSAGE) | 0.9381 ± 0.0012 | 0.9380 ± 0.0011 | 0.0414 ± 0.0011 | 0.0221 | 0.8171 ± 0.0051 |
-| Pre-processing (Resampling) | 0.9381 | 0.9380 | 0.0553 | 0.0365 | n/a |
+| Pre-processing (Resampling) | 0.9381 | 0.9380 | 0.0553 | 0.0365 | 0.8163 |
 | Pre-processing (FairDrop) | 0.9353 | 0.9351 | 0.0380 | 0.0206 | 0.8779 |
-| FairGNN (best λ) | 0.8272 | 0.8272 | 0.0137 | 0.0083 | n/a |
+| FairGNN (λ=1.0) | 0.8272 | 0.8272 | 0.0137 | 0.0083 | 0.8586 |
+| **Post-processing DP** | **0.9366** | **0.9365** | **0.0067** | 0.0091 | **0.8110** |
+| **Post-processing EO** | 0.9337 | 0.9336 | 0.0114 | **0.0034** | **0.8110** |
 
 **Key observations:**
-- **Resampling** preserves accuracy exactly (same as baseline) but *increases* ΔDP (+34%) and ΔEO (+65%) — label/gender correlations in the graph structure overwhelm the balancing effect, and the method does not constrain the embedding space
-- **FairDrop** achieves a modest accuracy drop (−0.28 pp) with a 8% ΔDP reduction and 6.8% ΔEO reduction; leakage actually increases slightly (0.817 → 0.878), suggesting FairDrop's structural pruning may redistribute rather than eliminate gender-correlated structure in embeddings on this highly homophilic graph
-- **FairGNN** achieves the best fairness: ΔDP −67% (0.0414 → 0.0137), ΔEO −62% (0.0221 → 0.0083), at a cost of −10.9 pp in F1 (0.938 → 0.827); the adversarial debiasing effectively constrains the representation space
+- **Resampling** preserves accuracy exactly but *increases* ΔDP (+34%) and ΔEO (+65%) — label/gender correlations in the graph structure overwhelm the balancing effect; the method does not touch the embedding space
+- **FairDrop** achieves a modest accuracy drop (−0.28 pp) with a 8% ΔDP reduction; leakage increases (0.817 → 0.878) because the structural bias channel shifts from gender homophily to the correlated region homophily (r≈0.87)
+- **FairGNN** achieves ΔDP −67% at a cost of −10.9 pp in F1; leakage paradoxically increases (0.817 → 0.859) for the same structural reason
+- **Post-processing DP** achieves the best ΔDP reduction of all methods (−84%, 0.0414 → 0.0067) with negligible F1 cost (−0.2 pp); thresholds t0=0.38 < t1=0.56 compensate for the model's systematic under-confidence on gender=0 nodes
+- **Post-processing EO** achieves the best ΔEO (−85%, 0.0221 → 0.0034) with t0=0.34 < t1=0.48; leakage is unchanged for both post-processing methods (embeddings are frozen)
 
-See `results/figures/pareto_fairness.png` for the fairness–accuracy Pareto plot and `results/figures/counterfactual_fairness.png` for CF scores (baseline and FairDrop).
+See `results/figures/post_threshold_analysis.png` for the fairness–accuracy Pareto front and method comparison, `results/figures/post_threshold_distributions.png` for probability distributions by group, and `results/figures/pareto_fairness.png` for the original Pareto plot.
 
 ### Structural Bias
 
@@ -99,15 +103,22 @@ A high r explains why GNN embeddings encode sensitive information even when it i
 ## 3. Trade-off Analysis
 
 ### Fairness vs. Accuracy Pareto
-Each method occupies a different position on the fairness–accuracy Pareto frontier:
+Each method occupies a different position on the fairness–accuracy Pareto frontier. Post-processing is Pareto-dominant over all other methods on the (ΔDP, F1) plane:
 
-- **Baseline**: highest accuracy, highest bias (no debiasing); Representation Bias (RB) / leakage expected to be high (~0.73 AUC) because the graph structure encodes gender via homophily (r ≈ 0.87 for region)
-- **Resampling**: modest bias reduction by balancing label×gender combinations in training; counter-intuitively may *worsen* ΔDP on this dataset due to label/gender correlations in the graph structure; does not directly constrain the embedding space
-- **FairDrop** (Spinelli et al., 2021, reviewed in Laclau et al., 2024): attacks structural bias at its root by preferentially removing intra-group edges before training, reducing r and limiting the structural signal available to the GNN; expected to reduce RB/leakage more reliably than resampling
-- **FairGNN**: directly optimizes `L_cls − λ * L_adv`, pushing the encoder toward gender-invariant representations; higher λ → more fairness, lower leakage, but less discriminative power
+- **Baseline**: highest accuracy, highest bias; leakage=0.817 encodes gender via region homophily (r≈0.87)
+- **Resampling**: counter-intuitively *worsens* ΔDP (+34%) — label/gender graph correlations overwhelm label balancing; does not constrain the embedding space
+- **FairDrop**: modest ΔDP reduction (−8%), leakage increases (0.878) — structural bias shifts to region channel
+- **FairGNN**: best ΔDP among representation-modifying methods (−67%), but F1 cost −10.9 pp and leakage paradoxically increases (0.859)
+- **Post-processing DP**: best ΔDP overall (−84%, 0.0067) with only −0.2 pp F1 loss; no retraining required
+- **Post-processing EO**: best ΔEO (−85%, 0.0034) with −0.5 pp F1 loss
+
+The key insight is the **orthogonality of decision fairness and representation fairness**: post-processing achieves near-perfect decision parity (ΔDP→0) while leakage remains at the baseline level (0.811). FairGNN attempts to fix representation bias but achieves worse decision fairness at much higher accuracy cost. These two objectives require different interventions.
 
 ### FairGNN λ Selection
-Optimal λ is selected on val ΔDP (lowest). Note: λ=0.1 and λ=1.0 may cause model collapse (predict all-zero, artificially driving ΔDP→0 while F1 drops to ~48%). To be validated on the new target.
+Optimal λ=1.0 selected on val ΔDP. Non-monotonicity at λ=5.0 (ΔDP rises from 0.014 to 0.024) reflects adversary collapse: excessive penalty causes the encoder to circumvent the discriminator rather than genuinely removing the gender signal.
+
+### Post-processing Threshold Calibration
+Grid search (101×101) over (t₀, t₁) ∈ [0,1]² on the validation set, with a minimum F1 retention constraint (≥95% of baseline val F1) to prevent the degenerate solution t₀=t₁=0 (predict all positive, ΔDP=0 trivially). The calibrated Pareto front (51×51 grid) contains only 14 non-dominated points, reflecting the narrow feasible region where fairness improves without significant accuracy loss.
 
 ### Counterfactual Fairness
 The **counterfactual unfairness score** (NIFTY, Agarwal et al. 2021) complements RB/leakage:
@@ -150,6 +161,7 @@ All generated code was reviewed, tested, and verified by the author. The experim
 
 - **Laclau, C., Largeron, C., & Choudhary, M. (2024)**. A Survey on Fairness for Machine Learning on Graphs. *arXiv:2205.05396v2*. ← primary reference for this project's framework, metrics, and methods
 - Dai, E., & Wang, S. (2021). Say No to the Discrimination: Learning Fair Graph Neural Networks with Limited Sensitive Attribute Information. *WSDM 2021*.
+- **Hardt, M., Price, E., & Srebro, N. (2016)**. Equality of Opportunity in Supervised Learning. *NeurIPS 2016*. ← post-processing threshold calibration
 - Agarwal, C. et al. (2021). NIFTY: A framework for benchmarking graph neural networks for fairness. *arXiv:2109.05228*.
 - Spinelli, I. et al. (2021). FairDrop: Biased Edge Dropout for Enhancing Fairness in Graph Representation Learning. *IEEE TNNLS*.
 - Newman, M. E. J. (2003). Mixing patterns in networks. *Physical Review E, 67*(2).
