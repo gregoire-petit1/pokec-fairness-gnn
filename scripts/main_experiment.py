@@ -677,6 +677,57 @@ def apply_equal_opportunity_threshold(
     )
 
 
+def apply_temperature_calibration(
+    out: ModelOutput,
+    data,
+    val_mask: torch.Tensor,
+    test_mask: torch.Tensor,
+) -> ModelOutput:
+    """Recalibrate ``out`` via temperature scaling fitted on val (Guo 2017).
+
+    GraphSAGE-style classifiers produce over-confident softmax outputs. This
+    helper extracts the (binary) logit margin ``z = log(p / (1-p))`` from the
+    cached ``proba_val_pos`` and ``proba`` test, fits a single scalar ``T`` on
+    val, and returns a new ``ModelOutput`` with calibrated probabilities.
+    Predictions (argmax) are **unchanged** — only the confidence is rescaled.
+    """
+    if "proba_val_pos" not in out.extra:
+        raise ValueError(f"cannot calibrate {out.name}: extra['proba_val_pos'] missing")
+    if out.proba is None or out.proba.ndim != 2 or out.proba.shape[1] < 2:
+        raise ValueError(f"cannot calibrate {out.name}: 2-column proba needed")
+
+    from src.postprocess.calibration import apply_temperature, fit_temperature
+
+    proba_val_pos = np.clip(out.extra["proba_val_pos"], 1e-7, 1.0 - 1e-7)
+    proba_test_pos = np.clip(out.proba[:, 1], 1e-7, 1.0 - 1e-7)
+    z_val = np.log(proba_val_pos / (1.0 - proba_val_pos)).astype(np.float32)
+    z_test = np.log(proba_test_pos / (1.0 - proba_test_pos)).astype(np.float32)
+
+    # Convert to (n, 2) logits with the negative class at 0 (binary case)
+    logits_val_t = torch.from_numpy(np.stack([np.zeros_like(z_val), z_val], axis=1))
+    logits_test_t = torch.from_numpy(np.stack([np.zeros_like(z_test), z_test], axis=1))
+    y_val_np = data.y[val_mask].cpu().numpy()
+    y_val_t = torch.from_numpy(y_val_np).long()
+
+    T = fit_temperature(logits_val_t, y_val_t)
+    proba_test_cal = apply_temperature(logits_test_t, T).numpy().astype(np.float32)
+    proba_val_cal = apply_temperature(logits_val_t, T).numpy().astype(np.float32)
+
+    return ModelOutput(
+        name=f"{out.name}+TempCal",
+        acc=out.acc,
+        f1=out.f1,
+        pred=out.pred,
+        proba=proba_test_cal,
+        embeddings=out.embeddings,
+        extra={
+            **out.extra,
+            "proba_val_pos": proba_val_cal[:, 1] if proba_val_cal.shape[1] >= 2 else proba_val_cal.ravel(),
+            "temperature": T,
+        },
+    )
+
+
 def apply_inlp_to_embeddings(
     out: ModelOutput,
     data,
@@ -1233,6 +1284,35 @@ def run_all(
                     tab_inlp, data, sensitive_attrs, train_mask, test_mask, seed
                 )
             )
+
+    # ---- Temperature scaling on GraphSAGE — fair comparison with TabICL ------
+    # GraphSAGE's softmax is over-confident; TabICL is ensemble-calibrated.
+    # Recalibrating GraphSAGE via Guo 2017 + applying DPT lets us check
+    # whether the GraphSAGE vs TabICL fairness gap was driven by raw
+    # calibration differences rather than fundamental capacity differences.
+    print("[6.85] temperature scaling on GraphSAGE + DPT@gender …")
+    base_cal = apply_temperature_calibration(base_out, data, val_mask, test_mask)
+    print(
+        f"      [GraphSAGE+TempCal] acc={base_cal.acc:.4f}  f1={base_cal.f1:.4f}  T={base_cal.extra.get('temperature'):.3f}"
+    )
+    all_dfs.append(
+        compute_multi_attr_fairness(
+            base_cal, data, sensitive_attrs, train_mask, test_mask, seed
+        )
+    )
+    base_cal_dpt = apply_equal_opportunity_threshold(
+        base_cal, data, val_mask, test_mask,
+        sensitive_name="gender", strategy="demographic_parity",
+        name_override="GraphSAGE+TempCal+DPT@gender",
+    )
+    print(
+        f"      [GraphSAGE+TempCal+DPT@gender] acc={base_cal_dpt.acc:.4f}  f1={base_cal_dpt.f1:.4f}"
+    )
+    all_dfs.append(
+        compute_multi_attr_fairness(
+            base_cal_dpt, data, sensitive_attrs, train_mask, test_mask, seed
+        )
+    )
 
     # ---- Killer combo: INLP + DPT (latent + output simultaneously) -----------
     # INLP cleans the latent (leakage AUC → ~0.55).
