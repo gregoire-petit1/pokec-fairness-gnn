@@ -210,15 +210,21 @@ def _evaluate_classifier(
     data,
     test_mask: torch.Tensor,
     name: str,
+    val_mask: torch.Tensor | None = None,
 ) -> ModelOutput:
+    """Evaluate ``model`` on ``test_mask``. If ``val_mask`` is also provided,
+    also computes proba on val and stashes it in ``extra["proba_val_pos"]``
+    for downstream post-processing (Hardt-style threshold calibration).
+    """
     model.eval()
     with torch.no_grad():
         logits = model(data.x, data.edge_index)
         # FairGNN forward returns a tuple; baseline GraphSAGE returns logits.
         if isinstance(logits, tuple):
             logits = logits[0]
+        proba_full_t = F.softmax(logits, dim=1)
         pred = logits[test_mask].argmax(dim=1)
-        proba = F.softmax(logits[test_mask], dim=1).cpu().numpy().astype(np.float32)
+        proba_test = proba_full_t[test_mask].cpu().numpy().astype(np.float32)
         emb = (
             model.get_embeddings(data.x, data.edge_index)
             if hasattr(model, "get_embeddings")
@@ -229,7 +235,16 @@ def _evaluate_classifier(
     pred_np = pred.cpu().numpy()
     acc = float(accuracy_score(y_test_np, pred_np))
     f1 = float(f1_score(y_test_np, pred_np, average="macro", zero_division=0))
-    return ModelOutput(name=name, acc=acc, f1=f1, pred=pred, proba=proba, embeddings=emb, extra={})
+
+    extra: dict[str, Any] = {}
+    if val_mask is not None:
+        with torch.no_grad():
+            proba_val = proba_full_t[val_mask].cpu().numpy().astype(np.float32)
+        extra["proba_val_pos"] = proba_val[:, 1] if proba_val.shape[1] >= 2 else proba_val.ravel()
+
+    return ModelOutput(
+        name=name, acc=acc, f1=f1, pred=pred, proba=proba_test, embeddings=emb, extra=extra
+    )
 
 
 def run_baseline(
@@ -237,7 +252,7 @@ def run_baseline(
 ) -> ModelOutput:
     """Vanilla GraphSAGE — graph + features, no fairness intervention."""
     model = _train_graphsage(data, train_mask, val_mask, cfg, seed)
-    return _evaluate_classifier(model, data, test_mask, name="GraphSAGE")
+    return _evaluate_classifier(model, data, test_mask, val_mask=val_mask, name="GraphSAGE")
 
 
 def run_resampling(
@@ -251,7 +266,7 @@ def run_resampling(
     over_mask = torch.zeros_like(train_mask)
     over_mask[over_idx.to(over_mask.device)] = True
     model = _train_graphsage(data, over_mask, val_mask, cfg, seed)
-    out = _evaluate_classifier(model, data, test_mask, name="GraphSAGE+Resampling")
+    out = _evaluate_classifier(model, data, test_mask, val_mask=val_mask, name="GraphSAGE+Resampling")
     return out
 
 
@@ -281,7 +296,7 @@ def run_fairdrop(
     data.edge_index = new_edge_index
     try:
         model = _train_graphsage(data, train_mask, val_mask, cfg, seed)
-        out = _evaluate_classifier(model, data, test_mask, name="GraphSAGE+FairDrop")
+        out = _evaluate_classifier(model, data, test_mask, val_mask=val_mask, name="GraphSAGE+FairDrop")
     finally:
         data.edge_index = original_ei
     return out
@@ -353,7 +368,7 @@ def run_fairgnn_grid(
         if best_st is not None:
             model.load_state_dict(best_st)
 
-        out = _evaluate_classifier(model, data, test_mask, name=f"FairGNN(λ={lam})")
+        out = _evaluate_classifier(model, data, test_mask, val_mask=val_mask, name=f"FairGNN(λ={lam})")
         ddp = demographic_parity_diff(out.pred, data.gender[test_mask])
         grid[lam] = {"f1": out.f1, "acc": out.acc, "delta_dp": ddp}
         best_state[lam] = best_st
@@ -373,7 +388,9 @@ def run_fairgnn_grid(
         lambda_adv=chosen,
     ).to(data.x.device)
     model.load_state_dict(best_state[chosen])
-    final = _evaluate_classifier(model, data, test_mask, name=f"FairGNN(λ={chosen})")
+    final = _evaluate_classifier(
+        model, data, test_mask, val_mask=val_mask, name=f"FairGNN(λ={chosen})"
+    )
     final.extra["grid"] = grid
     final.extra["chosen_lambda"] = chosen
     return final, grid
@@ -400,18 +417,25 @@ def run_tabicl(
     x_np = data.x.detach().cpu().numpy().astype(np.float32)
     y_np = data.y.detach().cpu().numpy().astype(np.int64)
     train_idx_np = train_mask.detach().cpu().numpy().nonzero()[0]
+    val_idx_np = val_mask.detach().cpu().numpy().nonzero()[0]
     test_idx_np = test_mask.detach().cpu().numpy().nonzero()[0]
 
-    pred_np, proba_pos = tabicl_predict(
+    # Predict on val + test in a single concatenated call so TabICL fits once.
+    eval_idx_np = np.concatenate([val_idx_np, test_idx_np])
+    pred_np_all, proba_pos_all = tabicl_predict(
         x_np,
         y_np,
         train_idx_np,
-        test_idx_np,
+        eval_idx_np,
         seed=seed,
         max_train=max_train,
         device=str(data.x.device) if data.x.is_cuda else "cpu",
     )
-    proba_2col = np.stack([1.0 - proba_pos, proba_pos], axis=1)
+    n_val = val_idx_np.size
+    proba_val_pos = proba_pos_all[:n_val].astype(np.float32)
+    proba_test_pos = proba_pos_all[n_val:].astype(np.float32)
+    pred_np = pred_np_all[n_val:]
+    proba_2col_test = np.stack([1.0 - proba_test_pos, proba_test_pos], axis=1)
 
     pred = torch.from_numpy(pred_np).long().to(data.x.device)
     acc = float(accuracy_score(y_np[test_idx_np], pred_np))
@@ -422,9 +446,70 @@ def run_tabicl(
         acc=acc,
         f1=f1,
         pred=pred,
-        proba=proba_2col,
+        proba=proba_2col_test,
         embeddings=None,
-        extra={"max_train": max_train},
+        extra={"max_train": max_train, "proba_val_pos": proba_val_pos},
+    )
+
+
+# ---------------------------------------------------------------------------
+# Post-process — Hardt et al. 2016 group-specific threshold
+# ---------------------------------------------------------------------------
+
+
+def apply_equal_opportunity_threshold(
+    out: ModelOutput,
+    data,
+    val_mask: torch.Tensor,
+    test_mask: torch.Tensor,
+    sensitive_name: str = "gender",
+    strategy: str = "equal_opportunity",
+) -> ModelOutput:
+    """Wrap ``out`` with a per-group threshold calibrated on val, applied on test.
+
+    Hardt, Price & Srebro 2016 — applicable to any classifier with proba output,
+    including frozen ones (TabICL) where in-training fairness can't be inserted.
+    """
+    from src.postprocess.equal_opportunity import calibrate_predictions
+
+    if "proba_val_pos" not in out.extra:
+        raise ValueError(
+            f"cannot post-process {out.name}: extra['proba_val_pos'] missing"
+        )
+    if out.proba is None:
+        raise ValueError(f"cannot post-process {out.name}: proba is None")
+
+    proba_val_pos = out.extra["proba_val_pos"]
+    proba_test_pos = out.proba[:, 1] if out.proba.ndim == 2 else out.proba.ravel()
+
+    sensitive_full = getattr(data, sensitive_name).long()
+    sensitive_val_np = sensitive_full[val_mask].cpu().numpy()
+    sensitive_test_np = sensitive_full[test_mask].cpu().numpy()
+    y_val_np = data.y[val_mask].cpu().numpy()
+
+    pred_test_np, thresholds = calibrate_predictions(
+        proba_val_pos,
+        y_val_np,
+        sensitive_val_np,
+        proba_test_pos,
+        sensitive_test_np,
+        strategy=strategy,
+    )
+
+    pred_test = torch.from_numpy(pred_test_np).long().to(out.pred.device)
+    y_test_np = data.y[test_mask].cpu().numpy()
+    acc = float(accuracy_score(y_test_np, pred_test_np))
+    f1 = float(f1_score(y_test_np, pred_test_np, average="macro", zero_division=0))
+
+    suffix = "EOT" if strategy == "equal_opportunity" else "DPT"
+    return ModelOutput(
+        name=f"{out.name}+{suffix}@{sensitive_name}",
+        acc=acc,
+        f1=f1,
+        pred=pred_test,
+        proba=out.proba,
+        embeddings=out.embeddings,
+        extra={**out.extra, "thresholds": thresholds, "post_strategy": strategy},
     )
 
 
@@ -555,6 +640,27 @@ def run_all(
         )
     else:
         print("[5/5] TabICL skipped.")
+        tab_out = None
+
+    # ---- Post-process variants (Hardt et al. 2016) on the two endpoints ------
+    print("[6] post-process Equal-Opportunity threshold @ gender …")
+    base_eot = apply_equal_opportunity_threshold(
+        base_out, data, val_mask, test_mask, sensitive_name="gender"
+    )
+    print(f"      [GraphSAGE+EOT@gender] acc={base_eot.acc:.4f}  f1={base_eot.f1:.4f}")
+    all_dfs.append(
+        compute_multi_attr_fairness(base_eot, data, sensitive_attrs, train_mask, test_mask, seed)
+    )
+    if tab_out is not None:
+        tab_eot = apply_equal_opportunity_threshold(
+            tab_out, data, val_mask, test_mask, sensitive_name="gender"
+        )
+        print(f"      [TabICL+EOT@gender]    acc={tab_eot.acc:.4f}  f1={tab_eot.f1:.4f}")
+        all_dfs.append(
+            compute_multi_attr_fairness(
+                tab_eot, data, sensitive_attrs, train_mask, test_mask, seed
+            )
+        )
 
     df = pl.concat(all_dfs, how="diagonal_relaxed")
     out_path = Path(out_csv)
