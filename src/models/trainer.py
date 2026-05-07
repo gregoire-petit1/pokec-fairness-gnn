@@ -11,12 +11,25 @@ def train_epoch(
     data: Data,
     optimizer: torch.optim.Optimizer,
     train_mask: torch.Tensor,
+    sample_weights: torch.Tensor | None = None,
 ) -> float:
-    """Run one training epoch. Returns cross-entropy loss."""
+    """Run one training epoch. Returns mean cross-entropy loss.
+
+    When ``sample_weights`` is provided, it must be a 1-D tensor of shape
+    ``(N,)`` indexable by ``train_mask`` (typically produced by
+    :func:`src.fairness.reweighting.kamiran_calders_weights` and broadcast
+    onto the full graph). The weighted loss is ``mean_i w_i * CE_i``.
+    """
     model.train()
     optimizer.zero_grad()
     out = model(data.x, data.edge_index)
-    loss = F.cross_entropy(out[train_mask], data.y[train_mask])
+    if sample_weights is None:
+        loss = F.cross_entropy(out[train_mask], data.y[train_mask])
+    else:
+        per_sample = F.cross_entropy(
+            out[train_mask], data.y[train_mask], reduction="none"
+        )
+        loss = (per_sample * sample_weights[train_mask]).mean()
     loss.backward()
     optimizer.step()
     return loss.item()
@@ -47,8 +60,14 @@ def train(
     lr: float,
     epochs: int,
     patience: int,
+    sample_weights: torch.Tensor | None = None,
 ) -> tuple[float, list[dict]]:
     """Train with early stopping on val F1-macro.
+
+    Args:
+        sample_weights: optional ``(N,)`` weights tensor — when provided, the
+            cross-entropy loss is reweighted per-row (used by Kamiran-Calders
+            pre-processing). Defaults to ``None`` (uniform weights).
 
     Returns:
         best_val_f1: best validation F1 achieved
@@ -61,7 +80,7 @@ def train(
     history = []
 
     for epoch in range(epochs):
-        loss = train_epoch(model, data, optimizer, train_mask)
+        loss = train_epoch(model, data, optimizer, train_mask, sample_weights=sample_weights)
         _, val_f1 = evaluate(model, data, val_mask)
         history.append({"epoch": epoch, "loss": loss, "val_f1": val_f1})
 

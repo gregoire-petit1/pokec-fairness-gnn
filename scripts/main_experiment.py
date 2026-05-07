@@ -57,6 +57,7 @@ from src.fairness.metrics import (  # noqa: E402
     sensitive_leakage,
 )
 from src.fairness.resampling import oversample_train_indices  # noqa: E402
+from src.fairness.reweighting import kamiran_calders_weights  # noqa: E402
 from src.models.fairgnn import FairGNN, fairgnn_loss  # noqa: E402
 from src.models.graphsage import GraphSAGE  # noqa: E402
 from src.models.trainer import train  # noqa: E402
@@ -349,6 +350,57 @@ def run_baseline(
     """Vanilla GraphSAGE — graph + features, no fairness intervention."""
     model = _train_graphsage(data, train_mask, val_mask, cfg, seed)
     return _evaluate_classifier(model, data, test_mask, val_mask=val_mask, name="GraphSAGE")
+
+
+def run_reweighted(
+    data,
+    train_mask: torch.Tensor,
+    val_mask: torch.Tensor,
+    test_mask: torch.Tensor,
+    cfg: ExperimentConfig,
+    seed: int,
+    sensitive_name: str = "gender",
+) -> ModelOutput:
+    """GraphSAGE trained with Kamiran-Calders sample weights on (label × s).
+
+    Pre-process method that pulls the joint distribution P(s, y) towards
+    P(s) * P(y) via per-row weights in the cross-entropy loss. Works for any
+    cardinality of ``s`` (binary, multi-class age_group, intersectional
+    composites), unlike FairGNN which is tied to a binary adversary.
+    """
+    setup_seeds(seed)
+    sensitive = getattr(data, sensitive_name).detach().cpu().numpy()
+    y_np = data.y.detach().cpu().numpy()
+    train_idx = train_mask.detach().cpu().numpy().nonzero()[0]
+
+    # Build a full-graph weights tensor; non-train rows stay at 1.0 (unused).
+    weights_full = np.ones(data.num_nodes, dtype=np.float32)
+    weights_full[train_idx] = kamiran_calders_weights(
+        y_np[train_idx], sensitive[train_idx]
+    )
+    sample_weights = torch.from_numpy(weights_full).to(data.x.device)
+
+    model = GraphSAGE(
+        in_channels=data.x.shape[1],
+        hidden_channels=cfg.hidden_dim,
+        out_channels=int(data.y.max().item()) + 1,
+        num_layers=cfg.num_layers,
+        dropout=cfg.dropout,
+    ).to(data.x.device)
+    train(
+        model,
+        data,
+        train_mask,
+        val_mask,
+        lr=cfg.lr,
+        epochs=cfg.epochs,
+        patience=cfg.patience,
+        sample_weights=sample_weights,
+    )
+    return _evaluate_classifier(
+        model, data, test_mask, val_mask=val_mask,
+        name=f"GraphSAGE+Reweighted@{sensitive_name}",
+    )
 
 
 def run_resampling(
@@ -783,40 +835,68 @@ def run_all(
         tab_out = None
 
     # ---- Post-process variants (Hardt et al. 2016) on multiple sensitive axes ----
-    # Unlike FairGNN — which is structurally tied to a single binary sensitive
-    # attribute via its adversary head — Hardt-style threshold post-processing
-    # scales to any categorical attribute by computing one threshold per group.
-    # We apply it on the two endpoint models (GraphSAGE = graph baseline,
-    # TabICL = no-graph baseline) across three sensitive axes:
-    #   * gender (binary, 2 groups)
-    #   * age_group (multi-class, 3 groups: young/adult/senior)
-    #   * region (binary, 2 groups; semantics inherited from FairGNN preprocessing)
-    print("[6] post-process Equal-Opportunity threshold (multi-axis) …")
+    # Two strategies × three axes × two endpoint models = 12 variants.
+    #   * "equal_opportunity": equalises TPR (P(ŷ=1|y=1,s)) — original Hardt criterion.
+    #   * "demographic_parity": equalises positive rate P(ŷ=1|s) — directly attacks ΔDP.
+    # The two strategies move different metrics (Chouldechova-Kleinberg 2017
+    # incompatibility); having both in the table makes the trade-off explicit.
+    print("[6] post-process threshold (multi-axis × two strategies) …")
     eot_axes = ("gender", "age_group", "region")
-    for axis in eot_axes:
-        base_eot = apply_equal_opportunity_threshold(
-            base_out, data, val_mask, test_mask, sensitive_name=axis
-        )
-        print(
-            f"      [GraphSAGE+EOT@{axis:<10s}] acc={base_eot.acc:.4f}  f1={base_eot.f1:.4f}"
-        )
-        all_dfs.append(
-            compute_multi_attr_fairness(
-                base_eot, data, sensitive_attrs, train_mask, test_mask, seed
-            )
-        )
-        if tab_out is not None:
-            tab_eot = apply_equal_opportunity_threshold(
-                tab_out, data, val_mask, test_mask, sensitive_name=axis
+    eot_strategies = (
+        ("equal_opportunity", "EO"),
+        ("demographic_parity", "DP"),
+    )
+    for strategy, tag in eot_strategies:
+        for axis in eot_axes:
+            base_eot = apply_equal_opportunity_threshold(
+                base_out, data, val_mask, test_mask,
+                sensitive_name=axis, strategy=strategy,
             )
             print(
-                f"      [TabICL+EOT@{axis:<10s}]   acc={tab_eot.acc:.4f}  f1={tab_eot.f1:.4f}"
+                f"      [GraphSAGE+{tag}T@{axis:<10s}] acc={base_eot.acc:.4f}  f1={base_eot.f1:.4f}"
             )
             all_dfs.append(
                 compute_multi_attr_fairness(
-                    tab_eot, data, sensitive_attrs, train_mask, test_mask, seed
+                    base_eot, data, sensitive_attrs, train_mask, test_mask, seed
                 )
             )
+            if tab_out is not None:
+                tab_eot = apply_equal_opportunity_threshold(
+                    tab_out, data, val_mask, test_mask,
+                    sensitive_name=axis, strategy=strategy,
+                )
+                print(
+                    f"      [TabICL+{tag}T@{axis:<10s}]   acc={tab_eot.acc:.4f}  f1={tab_eot.f1:.4f}"
+                )
+                all_dfs.append(
+                    compute_multi_attr_fairness(
+                        tab_eot, data, sensitive_attrs, train_mask, test_mask, seed
+                    )
+                )
+
+    # ---- Pre-process Kamiran & Calders 2012 reweighting (multi-axis) ----------
+    # Each example gets weight P(s)*P(y) / P(s,y), pulling the joint towards
+    # independence. Works on any cardinality of s — including the multi-class
+    # age_group case where FairGNN's binary adversary doesn't apply.
+    print("[7] pre-process Kamiran-Calders reweighting (multi-axis) …")
+    for axis in eot_axes:
+        rw_out = _cached_run(
+            lambda axis=axis: run_reweighted(
+                data, train_mask, val_mask, test_mask, cfg, seed, sensitive_name=axis
+            ),
+            cache_path,
+            seed,
+            f"GraphSAGE+Reweighted_{axis}",
+            device,
+        )
+        print(
+            f"      [GraphSAGE+Reweighted@{axis:<10s}] acc={rw_out.acc:.4f}  f1={rw_out.f1:.4f}"
+        )
+        all_dfs.append(
+            compute_multi_attr_fairness(
+                rw_out, data, sensitive_attrs, train_mask, test_mask, seed
+            )
+        )
 
     df = pl.concat(all_dfs, how="diagonal_relaxed")
     out_path = Path(out_csv)
