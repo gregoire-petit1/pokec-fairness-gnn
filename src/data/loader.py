@@ -1,4 +1,4 @@
-"""Load Pokec-z dataset into a PyG Data object (polars-backed, no pandas)."""
+"""Load a Pokec subset (z or n) into a PyG Data object (polars-backed, no pandas)."""
 
 from pathlib import Path
 
@@ -9,25 +9,48 @@ from torch_geometric.data import Data
 
 TARGET_COL = "completed_level_of_education_indicator"
 
+# FairGNN-shipped filenames. Pokec-z = ``region_job_2.{csv,_relationship.txt}``;
+# Pokec-n = ``region_job.{csv,_relationship.txt}``. The loader auto-detects
+# which one is present in ``raw_dir``.
+_CANDIDATE_FILENAMES = (
+    ("region_job_2.csv", "region_job_2_relationship.txt"),
+    ("region_job.csv", "region_job_relationship.txt"),
+)
+
+
+def _resolve_paths(raw_dir: Path) -> tuple[Path, Path]:
+    """Return (features_path, edges_path) for whichever subset is in ``raw_dir``."""
+    for f, e in _CANDIDATE_FILENAMES:
+        feats = raw_dir / f
+        edges = raw_dir / e
+        if feats.exists() and edges.exists():
+            return feats, edges
+    candidates = ", ".join(f"({f}, {e})" for f, e in _CANDIDATE_FILENAMES)
+    raise FileNotFoundError(
+        f"no FairGNN Pokec subset found under {raw_dir} — looked for {candidates}"
+    )
+
 
 def load_pokec_z(raw_dir: str | Path) -> Data:
-    """Load Pokec-z from raw CSV files and return a PyG Data object.
+    """Load a Pokec subset from raw CSV files and return a PyG Data object.
 
-    Pure polars + numpy + torch path: no pandas, no Python loops on rows. The
-    raw polars DataFrame is attached to ``data.raw_df`` so downstream
-    ``preprocess()`` can extract sensitive attribute columns.
+    Auto-detects whether ``raw_dir`` contains Pokec-z (``region_job_2.csv``) or
+    Pokec-n (``region_job.csv``). Pure polars + numpy + torch path: no pandas,
+    no Python loops on rows. The raw polars DataFrame is attached to
+    ``data.raw_df`` so downstream ``preprocess()`` can extract sensitive
+    attribute columns.
 
     Args:
-        raw_dir: Path to the directory containing ``region_job_2.csv`` and
-            ``region_job_2_relationship.txt`` (the FairGNN Pokec-z subset).
+        raw_dir: Path to a directory containing one of the FairGNN Pokec
+            subsets (``region_job_2.csv`` for Pokec-z or ``region_job.csv``
+            for Pokec-n, with the matching ``_relationship.txt`` edges file).
 
     Returns:
         :class:`torch_geometric.data.Data` with ``x``, ``edge_index``, ``y``,
         ``feature_cols`` and ``raw_df`` (polars DataFrame).
     """
     raw_dir = Path(raw_dir)
-    features_path = raw_dir / "region_job_2.csv"
-    edges_path = raw_dir / "region_job_2_relationship.txt"
+    features_path, edges_path = _resolve_paths(raw_dir)
 
     # Features CSV — read, fill nulls, append a 0-indexed node id used to remap edges.
     df = pl.read_csv(features_path).fill_null(0)
