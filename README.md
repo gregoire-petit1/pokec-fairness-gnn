@@ -13,7 +13,7 @@ and Robustness**.
 > métriques fairness, ajoute un baseline non-graphe **TabICL** (foundation
 > model tabulaire) et étend l'analyse à **5 attributs sensibles** (gender,
 > region, age_group + intersections gender×age et gender×region) avec
-> reproduction sur **Pokec-n**. Le livrable principal est
+> Pokec-z. Le livrable principal est
 > `report/2_pager.pdf`.
 
 ---
@@ -105,8 +105,7 @@ pokec-fairness-gnn/
 │   │   ├── inlp.py                                  # Ravfogel 2020
 │   │   └── calibration.py                           # Guo 2017
 │   ├── baselines/
-│   │   ├── tabicl.py                                # wrapper foundation model
-│   │   └── tabicl_inlp_embedding.py                 # INLP sur row_repr cache
+│   │   └── tabicl.py                                # wrapper foundation model (contrôle non-graphe)
 │   ├── interpretability/explainer.py
 │   └── robustness/perturbations.py
 ├── scripts/
@@ -116,11 +115,15 @@ pokec-fairness-gnn/
 │   ├── target_sweep.py                              # Choix de la cible
 │   ├── plot_figures.py / plot_pareto.py             # Toutes les figures du PDF
 │   ├── build_pdf.py                                 # Construit report/2_pager.pdf
-│   └── run_tabicl_inlp_embedding.py                 # Validation INLP sur embeddings TabICL
-├── notebooks/main_experiment.ipynb                  # Coquille → main_experiment.run_all
-├── tests/                                           # 50+ pytest, ruff PD préset, no-pandas/no-loops
+│   ├── run_fairgnn_two_opt.py                       # FairGNN canonique (Dai-Wang 2-optimizer)
+│   ├── run_fairgnn_on_region.py                     # FairGNN avec adversaire region
+│   └── _build_fairness_notebook.py                  # Génère notebooks/fairness_findings.ipynb
+├── notebooks/
+│   ├── main_experiment.ipynb                        # Coquille → main_experiment.run_all
+│   └── fairness_findings.ipynb                      # ★ Notebook pédagogique 3 findings
+├── tests/                                           # 40+ pytest, ruff PD préset, no-pandas/no-loops
 ├── report/
-│   ├── 2_pager.pdf / 2_pager.md                     # ★ Livrable principal
+│   ├── 2_pager.pdf / 2_pager.md                     # ★ Livrable principal (3 pages)
 │   └── analysis_note.md                             # Note longue (référence interne)
 └── results/
     ├── figures/{fig1_toolbox,fig2_chain,fig3_cross_dataset,...}.png
@@ -143,10 +146,9 @@ git checkout feature/fairgnn-fix-and-multi-fairness
 uv venv .venv --python 3.12
 uv pip install -e ".[dev]"
 
-# 2. Données — subset FairGNN
-mkdir -p data/raw/pokec-z data/raw/pokec-n
-# Pokec-z : region_job_2.csv  + region_job_2_relationship.txt
-# Pokec-n : region_job.csv    + region_job_relationship.txt
+# 2. Données — subset FairGNN Pokec-z
+mkdir -p data/raw/pokec-z
+# region_job_2.csv  + region_job_2_relationship.txt
 # Source : https://github.com/EnyanDai/FairGNN/tree/main/dataset/pokec
 
 # 3. Tests (smoke <12 s ; full ~30 s)
@@ -166,18 +168,19 @@ bash scripts/run_multi_seed.sh
 .venv/bin/python scripts/aggregate_multi_seed.py
 # → results/metrics/comparison_multiseed_summary.csv
 
-# 7. Reproduction Pokec-n (cross-dataset)
-.venv/bin/python scripts/main_experiment.py --raw-dir data/raw/pokec-n \
-  --device cuda:1 --out comparison_pokec_n_seed42.csv
-
-# 8. Régénérer le 2-pager (figures + PDF)
+# 7. Régénérer le 2-pager (figures + PDF)
 .venv/bin/python scripts/plot_figures.py
 .venv/bin/python scripts/build_pdf.py
 # → report/2_pager.pdf
 
-# 9. Validation embeddings TabICL (INLP sur row_repr du cache, multi-seed × Pokec-z/n)
-.venv/bin/python scripts/run_tabicl_inlp_embedding.py
-# → results/metrics/tabicl_inlp_embedding.csv
+# 8. Notebook pédagogique des 3 findings
+.venv/bin/python scripts/_build_fairness_notebook.py
+# → notebooks/fairness_findings.ipynb
+
+# 9. FairGNN canonical (two-optimizer, multi-seed)
+.venv/bin/python scripts/run_fairgnn_two_opt.py --datasets pokec-z \
+  --seeds 3 7 21 42 99 --sensitives gender region
+# → results/metrics/fairgnn_two_opt_{gender,region}.csv
 ```
 
 ---

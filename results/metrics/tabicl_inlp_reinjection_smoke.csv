@@ -1,2 +1,0 @@
-dataset,seed,axis,n_train,n_test,embed_dim,f1_baseline,f1_after_inlp,f1_drop,leakage_pre,leakage_post,leakage_drop
-pokec-z,42,gender,10000,26628,512,0.9477459355561875,0.9472581814955093,0.0004877540606781361,0.807770628457175,0.6365502961619466,0.17122033229522837
