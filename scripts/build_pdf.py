@@ -1,14 +1,20 @@
-"""Render report/2_pager.md to PDF using markdown-pdf (pure-python, no LaTeX)."""
+"""Render report/2_pager.md (or any .md) to PDF via markdown-pdf, no LaTeX.
+
+Usage::
+
+    .venv/bin/python scripts/build_pdf.py [SRC_MD]
+
+Defaults to ``report/2_pager.md`` -> ``report/2_pager.pdf``.
+"""
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 from markdown_pdf import MarkdownPdf, Section
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-SRC = REPO_ROOT / "report" / "2_pager.md"
-OUT = REPO_ROOT / "report" / "2_pager.pdf"
 
 
 _USER_CSS = """
@@ -31,7 +37,13 @@ _PAGEBREAK_MARKER = "<!-- PAGEBREAK -->"
 
 
 def main() -> None:
-    text = SRC.read_text()
+    src = (
+        Path(sys.argv[1]).resolve()
+        if len(sys.argv) > 1
+        else REPO_ROOT / "report" / "2_pager.md"
+    )
+    out = src.with_suffix(".pdf")
+    text = src.read_text()
     # markdown-pdf creates a hard page break between Sections, so we split
     # on a custom marker (rendered as a comment by GitHub's md preview, so
     # the markdown stays readable on the GH side too).
@@ -41,14 +53,12 @@ def main() -> None:
     for chunk in chunks:
         if not chunk:
             continue
-        # root=SRC.parent so relative image paths (``fig1_toolbox_per_metric.png``)
-        # resolve next to the markdown — the report/ directory is self-contained
-        # and renders correctly both via this script and on GitHub's md preview.
-        pdf.add_section(Section(chunk, root=str(SRC.parent)), user_css=_USER_CSS)
+        # root=src.parent so relative image paths resolve next to the markdown.
+        pdf.add_section(Section(chunk, root=str(src.parent)), user_css=_USER_CSS)
     pdf.meta["title"] = "Pokec-z — fairness multi-axes par composition post-hoc"
     pdf.meta["author"] = "Mini-projet IADATA708"
-    pdf.save(str(OUT))
-    print(f"wrote {OUT}")
+    pdf.save(str(out))
+    print(f"wrote {out}")
 
 
 if __name__ == "__main__":
