@@ -460,31 +460,290 @@ print(df_axes)"""
         )
     )
 
+    # ── Step 9 — Other treatments (mono-axe) ────────────────────────────────
+    nb.cells.append(
+        md(
+            """\
+## Étape 9 — Autres traitements de la toolbox
+
+Pour comparer ULTIMATE aux autres méthodes post-process :
+- **EOT @gender** (Hardt 2016) : seuil par groupe gender pour égaliser le TPR.
+- **DPT @gender** : seuil par groupe gender pour égaliser le taux positif.
+- **INLP @gender** (Ravfogel 2020) : projette `x` orthogonalement à la
+  direction gender uniquement, puis re-fit TabICL.
+- **INLP+DPT @gender** : compose INLP et DPT sur le seul axe gender.
+
+Chaque méthode est focalisée sur un seul axe (gender) — c'est ce qui
+permettra de visualiser le compromis : DPT règle ΔDP, INLP règle le
+leakage, mais aucune mono-axe ne traite les intersections gender × age et
+gender × region (ULTIMATE composite est nécessaire pour ça)."""
+        )
+    )
+
+    # Helper functions (one cell)
+    nb.cells.append(
+        code(
+            """\
+def calibrate_dpt(proba_pos_val, sensitive_val, grid_size=51):
+    \"\"\"Per-group threshold calibrated for equal positive prediction rate.\"\"\"
+    grid = np.linspace(0.0, 1.0, grid_size, dtype=np.float32)
+    global_rate = float((proba_pos_val > 0.5).mean())
+    th = {}
+    for g in np.unique(sensitive_val):
+        mask = sensitive_val == g
+        if mask.sum() == 0:
+            th[int(g)] = 0.5
+            continue
+        rates = (proba_pos_val[mask][None, :] > grid[:, None]).mean(axis=1)
+        th[int(g)] = float(grid[int(np.argmin(np.abs(rates - global_rate)))])
+    return th
+
+
+def calibrate_eot(proba_pos_val, y_val, sensitive_val, grid_size=51):
+    \"\"\"Per-group threshold calibrated for equal TPR (Hardt 2016).\"\"\"
+    grid = np.linspace(0.0, 1.0, grid_size, dtype=np.float32)
+    pos_mask_global = y_val == 1
+    global_tpr = float((proba_pos_val[pos_mask_global] > 0.5).mean())
+    th = {}
+    for g in np.unique(sensitive_val):
+        mask = (sensitive_val == g) & pos_mask_global
+        if mask.sum() == 0:
+            th[int(g)] = 0.5
+            continue
+        tprs = (proba_pos_val[mask][None, :] > grid[:, None]).mean(axis=1)
+        th[int(g)] = float(grid[int(np.argmin(np.abs(tprs - global_tpr)))])
+    return th
+
+
+def apply_per_group_thresholds(proba_pos, sensitive, thresholds):
+    unique = np.unique(sensitive)
+    cell_to_t = np.array([thresholds.get(int(g), 0.5) for g in unique], dtype=np.float32)
+    _, inv = np.unique(sensitive, return_inverse=True)
+    return (proba_pos > cell_to_t[inv]).astype(np.int64)
+
+
+def metrics_5axes(pred_test, x_train_for_probe, x_test_for_probe):
+    \"\"\"Return dict {axis -> (delta_dp, delta_eo, leakage_auc)} for the 5 axes.\"\"\"
+    out = {}
+    for axis_name, (s_tr, s_te) in axes.items():
+        out[axis_name] = (
+            round(delta_dp(pred_test, s_te), 4),
+            round(delta_eo(pred_test, y[idx_test], s_te), 4),
+            round(leakage_auc(x_train_for_probe, x_test_for_probe, s_tr, s_te), 4),
+        )
+    return out
+
+
+print("Helpers DPT / EOT / metrics_5axes définis.")"""
+        )
+    )
+
+    # ── Step 9.1 — EOT @gender ──────────────────────────────────────────────
+    nb.cells.append(
+        md(
+            """\
+### 9.1 — EOT @gender (Hardt-Price-Srebro 2016)
+
+Calibrage de seuils par groupe gender pour **égaliser le TPR**.
+Cible : ΔEO → 0. Aucun effet sur le leakage (les embeddings ne changent pas)."""
+        )
+    )
+
+    nb.cells.append(
+        code(
+            """\
+proba_val_pos_baseline = clf_baseline.predict_proba(x[idx_val])[:, 1]
+proba_test_pos_baseline = proba_test_baseline[:, 1]
+
+th_eot = calibrate_eot(proba_val_pos_baseline, y[idx_val], gender[idx_val])
+pred_eot = apply_per_group_thresholds(proba_test_pos_baseline, gender[idx_test], th_eot)
+
+acc_eot = accuracy_score(y[idx_test], pred_eot)
+f1_eot = f1_score(y[idx_test], pred_eot, average="macro")
+m_eot = metrics_5axes(pred_eot, x[idx_train], x[idx_test])
+print(f"TabICL+EOT@gender :  acc={acc_eot:.4f}  F1={f1_eot:.4f}")
+print(f"  gender         ΔDP={m_eot['gender'][0]:.4f}  ΔEO={m_eot['gender'][1]:.4f}  leak={m_eot['gender'][2]:.4f}")
+print(f"  gender × age   ΔDP={m_eot['gender_x_age'][0]:.4f}  ΔEO={m_eot['gender_x_age'][1]:.4f}")"""
+        )
+    )
+
+    # ── Step 9.2 — DPT @gender ──────────────────────────────────────────────
+    nb.cells.append(
+        md(
+            """\
+### 9.2 — DPT @gender
+
+Calibrage de seuils par groupe gender pour **égaliser le taux positif
+prédit**. Cible : ΔDP gender → 0. Aussi sans effet sur le leakage."""
+        )
+    )
+
+    nb.cells.append(
+        code(
+            """\
+th_dpt = calibrate_dpt(proba_val_pos_baseline, gender[idx_val])
+pred_dpt = apply_per_group_thresholds(proba_test_pos_baseline, gender[idx_test], th_dpt)
+
+acc_dpt = accuracy_score(y[idx_test], pred_dpt)
+f1_dpt = f1_score(y[idx_test], pred_dpt, average="macro")
+m_dpt = metrics_5axes(pred_dpt, x[idx_train], x[idx_test])
+print(f"TabICL+DPT@gender :  acc={acc_dpt:.4f}  F1={f1_dpt:.4f}")
+print(f"  gender         ΔDP={m_dpt['gender'][0]:.4f}  ΔEO={m_dpt['gender'][1]:.4f}  leak={m_dpt['gender'][2]:.4f}")
+print(f"  gender × age   ΔDP={m_dpt['gender_x_age'][0]:.4f}  ΔEO={m_dpt['gender_x_age'][1]:.4f}")"""
+        )
+    )
+
+    # ── Step 9.3 — INLP @gender (re-fit TabICL on x_clean_gender) ───────────
+    nb.cells.append(
+        md(
+            """\
+### 9.3 — INLP @gender
+
+INLP appliqué sur l'axe gender uniquement (probe binaire), puis re-fit
+TabICL sur les features projetées. Cible : leakage gender → chance level.
+Sans effet sur ΔDP / ΔEO (les seuils restent à 0.5 par défaut)."""
+        )
+    )
+
+    nb.cells.append(
+        code(
+            """\
+_, P_gender = inlp(x[idx_train], gender[idx_train], n_iter=15, seed=SEED)
+x_train_clean_g = (x[idx_train] @ P_gender).astype(np.float32)
+x_val_clean_g = (x[idx_val] @ P_gender).astype(np.float32)
+x_test_clean_g = (x[idx_test] @ P_gender).astype(np.float32)
+
+clf_inlp_g = TabICLClassifier(random_state=SEED, device=DEVICE, n_estimators=4)
+clf_inlp_g.fit(x_train_clean_g, y[idx_train])
+
+proba_val_pos_inlp_g = clf_inlp_g.predict_proba(x_val_clean_g)[:, 1]
+proba_test_pos_inlp_g = clf_inlp_g.predict_proba(x_test_clean_g)[:, 1]
+pred_inlp_g = (proba_test_pos_inlp_g > 0.5).astype(np.int64)
+
+acc_inlp_g = accuracy_score(y[idx_test], pred_inlp_g)
+f1_inlp_g = f1_score(y[idx_test], pred_inlp_g, average="macro")
+m_inlp_g = metrics_5axes(pred_inlp_g, x_train_clean_g, x_test_clean_g)
+print(f"TabICL+INLP@gender :  acc={acc_inlp_g:.4f}  F1={f1_inlp_g:.4f}")
+print(f"  gender         ΔDP={m_inlp_g['gender'][0]:.4f}  ΔEO={m_inlp_g['gender'][1]:.4f}  leak={m_inlp_g['gender'][2]:.4f}")
+print(f"  gender × age   ΔDP={m_inlp_g['gender_x_age'][0]:.4f}  ΔEO={m_inlp_g['gender_x_age'][1]:.4f}")"""
+        )
+    )
+
+    # ── Step 9.4 — INLP+DPT @gender ─────────────────────────────────────────
+    nb.cells.append(
+        md(
+            """\
+### 9.4 — INLP+DPT @gender (composition mono-axe)
+
+INLP supprime le leakage gender, **puis** DPT calibre un seuil par groupe
+gender sur les probabilités INLP. Les deux opérations sont orthogonales
+(INLP modifie les features, DPT calibre les seuils sur la sortie).
+Cible : ΔDP gender → 0 ET leakage gender → chance level sur le seul axe
+gender."""
+        )
+    )
+
+    nb.cells.append(
+        code(
+            """\
+th_inlp_dpt = calibrate_dpt(proba_val_pos_inlp_g, gender[idx_val])
+pred_inlp_dpt = apply_per_group_thresholds(
+    proba_test_pos_inlp_g, gender[idx_test], th_inlp_dpt
+)
+
+acc_inlp_dpt = accuracy_score(y[idx_test], pred_inlp_dpt)
+f1_inlp_dpt = f1_score(y[idx_test], pred_inlp_dpt, average="macro")
+m_inlp_dpt = metrics_5axes(pred_inlp_dpt, x_train_clean_g, x_test_clean_g)
+print(f"TabICL+INLP+DPT@gender :  acc={acc_inlp_dpt:.4f}  F1={f1_inlp_dpt:.4f}")
+print(f"  gender         ΔDP={m_inlp_dpt['gender'][0]:.4f}  ΔEO={m_inlp_dpt['gender'][1]:.4f}  leak={m_inlp_dpt['gender'][2]:.4f}")
+print(f"  gender × age   ΔDP={m_inlp_dpt['gender_x_age'][0]:.4f}  ΔEO={m_inlp_dpt['gender_x_age'][1]:.4f}")"""
+        )
+    )
+
+    # ── Step 10 — Final comparison table ────────────────────────────────────
+    nb.cells.append(
+        md(
+            """\
+## Étape 10 — Tableau récapitulatif des traitements
+
+Comparaison côte-à-côte des 6 chaînes : baseline + 4 méthodes mono-axe
+(focus gender) + ULTIMATE composite (5 axes simultanément).
+
+**Lecture** :
+- Mono-axe (EOT, DPT, INLP, INLP+DPT) : règlent un aspect mais laissent
+  fuiter sur les axes croisés (effet whack-a-mole de Crenshaw).
+- ULTIMATE composite : règle simultanément les 5 axes, au prix de ~8 pp
+  de F1 vs baseline."""
+        )
+    )
+
+    nb.cells.append(
+        code(
+            """\
+m_baseline = metrics_5axes(pred_test_baseline, x[idx_train], x[idx_test])
+m_ultimate = metrics_5axes(pred_test_ultimate, x_train_clean, x_test_clean)
+
+summary_rows = []
+for name, acc_v, f1_v, mm in [
+    ("Baseline TabICL",          acc_baseline, f1_baseline, m_baseline),
+    ("TabICL+EOT@gender",        acc_eot,      f1_eot,      m_eot),
+    ("TabICL+DPT@gender",        acc_dpt,      f1_dpt,      m_dpt),
+    ("TabICL+INLP@gender",       acc_inlp_g,   f1_inlp_g,   m_inlp_g),
+    ("TabICL+INLP+DPT@gender",   acc_inlp_dpt, f1_inlp_dpt, m_inlp_dpt),
+    ("TabICL+ULTIMATE",          acc_ultimate, f1_ultimate, m_ultimate),
+]:
+    summary_rows.append({
+        "method": name,
+        "acc": round(acc_v, 4),
+        "f1_macro": round(f1_v, 4),
+        "ΔDP gender": mm["gender"][0],
+        "ΔEO gender": mm["gender"][1],
+        "leak gender": mm["gender"][2],
+        "leak age_group": mm["age_group"][2],
+        "ΔDP gender×age": mm["gender_x_age"][0],
+    })
+
+summary = pl.DataFrame(summary_rows)
+with pl.Config(tbl_rows=10, tbl_cols=10, fmt_str_lengths=40):
+    print(summary)"""
+        )
+    )
+
     nb.cells.append(
         md(
             """\
 ## Lecture finale
 
-| | Baseline TabICL | ULTIMATE (validé multi-seed) |
-|---|---:|---:|
-| Acc | ~0.946 | ~0.866 |
-| F1 macro | ~0.946 | ~0.866 |
-| Leakage gender | ~0.88 | ~0.50 |
-| Leakage age_group | ~0.99 | ~0.48 |
-| ΔDP gender | ~0.04 | ~0.013 |
-| ΔDP gender × age | ~0.09 | ~0.05 |
+| Méthode | Acc | F1 macro | ΔDP gender | leak gender | leak age_group |
+|---|---:|---:|---:|---:|---:|
+| Baseline TabICL | ~0.946 | ~0.946 | ~0.04 | ~0.88 | ~0.99 |
+| TabICL+EOT@gender | ~0.946 | ~0.946 | ~0.02 | ~0.88 | ~0.99 |
+| TabICL+DPT@gender | ~0.946 | ~0.946 | ~0.007 | ~0.88 | ~0.99 |
+| TabICL+INLP@gender | ~0.946 | ~0.946 | ~0.04 | ~0.71 | ~0.99 |
+| TabICL+INLP+DPT@gender | ~0.943 | ~0.943 | ~0.001 | ~0.71 | ~0.99 |
+| **TabICL+ULTIMATE** | ~0.866 | ~0.866 | ~0.013 | ~0.50 | ~0.48 |
 
-**Coût** : 8 pp de F1 / accuracy pour la fairness multi-axes complète.
-**Bénéfice** : leakage au chance level sur les 5 axes simultanément
-(incluant intersections), ΔDP < 0.05 partout.
+**Take-away** : sur l'axe gender seul, la composition INLP+DPT est
+imbattable (ΔDP=0.001, leak=0.71) à coût F1 quasi-nul. Mais elle laisse
+fuiter sur age_group (leak=0.99) et sur l'axe croisé. Pour traiter les
+5 axes simultanément, la chaîne ULTIMATE composite est nécessaire — au
+prix de 8 pp de F1.
 
-**Reproduction** :
+**Choisir la bonne chaîne** :
+- Une seule métrique compte (par ex. ΔDP gender) → DPT @gender.
+- Un seul axe compte mais multi-métriques → INLP+DPT @gender.
+- Plusieurs axes (incluant intersections) → ULTIMATE composite.
+
+**Reproduction** : <https://github.com/gregoire-petit1/pokec-fairness-gnn>
+(branche `feature/fairgnn-fix-and-multi-fairness`, PR #3).
 - `scripts/main_experiment.py` orchestre la chaîne complète multi-seed
   via `apply_inlp_composite_to_tabicl()` et `apply_composite_dpt()`.
 - `results/metrics/comparison_full.csv` contient les résultats validés
   pour seed=42, multi-méthodes × multi-axes.
 - `results/metrics/comparison_multiseed_summary.csv` agrège [3, 7, 21,
   42, 99] avec moyennes ± écarts-types.
+- `report/2_pager.pdf` : la note d'analyse (3 pages) avec figures et
+  annexe tableaux.
 
 **Variante exploratoire**. Une chaîne ULTIMATE-LATENT (INLP appliqué dans
 l'espace latent `TabICLCache.row_repr`) gagne 1.8 pp sur Pokec-z mais
