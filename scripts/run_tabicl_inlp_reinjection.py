@@ -161,7 +161,13 @@ def main() -> None:
                     flush=True,
                 )
             all_rows.extend(rows)
-            print(f"[{dataset} seed={seed}] done in {time.time() - t0:.1f}s", flush=True)
+            # Incremental save so a kill mid-run doesn't lose what's done.
+            pl.DataFrame(all_rows).write_csv(args.out)
+            print(
+                f"[{dataset} seed={seed}] done in {time.time() - t0:.1f}s "
+                f"(checkpoint {len(all_rows)} rows)",
+                flush=True,
+            )
 
     if not all_rows:
         print("nothing produced", flush=True)
