@@ -195,24 +195,19 @@ la formulation standard de Dai & Wang ; pour débiaiser `age_group`
 (3 classes) en in-training il faudrait redimensionner la tête de
 discriminateur, non implémenté.
 
-**Limite de généralisation.** Pokec-z et Pokec-n sont deux subsets du
-même réseau Pokec sur des régions slovaques différentes — c'est de la
-reproduction intra-dataset, pas du cross-dataset au sens strict (pour ça
-il faudrait Bail / Credit re-graphifiés). La cible
-`completed_level_of_education_indicator` est faiblement homophile en
-gender ; nos conclusions sur "post-process bat in-training" sont
-conditionnelles à cette propriété — sur un graphe fortement homophile à
-l'attribut sensible attendu, le classement pourrait s'inverser.
-
-**Pour conclure.** Le choix d'axe sensible est probablement la limite la
-plus structurante. Dans le contexte slovaque, l'axe ethnique — minorité
-hongroise et surtout minorité gitane — est beaucoup plus prévalent comme
-source de discrimination effective (logement, éducation, embauche) que
-l'axe du sexe sur lequel on a passé l'essentiel de l'étude. Le verrou
-principal n'est pas algorithmique mais en amont, au niveau de la curation
-des données. Tant qu'un dataset slovaque sans label ethnique reste le
-standard, l'évaluation des méthodes restera détachée des axes qui
-comptent vraiment dans le pays d'origine de la donnée.
+**Pour conclure.** Notre toolbox montre qu'on peut traiter la fairness sur
+un ou deux axes à coût d'utilité quasi-nul : DPT règle ΔDP, INLP+DPT
+règle ΔDP **et** leakage simultanément, à 0.5 pp de F1 près. Mais dès
+qu'on essaie de couvrir plus d'axes en même temps (composite multi-axes),
+la projection détruit suffisamment de signal utile pour que l'utilité
+s'effondre — sur GraphSAGE, la chaîne ULTIMATE perd 35 pp de F1 pour
+gagner le chance level sur 5 axes. **Faire de la fairness, c'est faire
+des choix** : quelle métrique privilégier, quels axes traiter, à quel
+coût d'utilité, sur quelle population (gender ? region ? un axe ethnique
+absent du dataset ?). Chaque choix encode une position normative.
+Et la question méta-éthique reste ouverte : *quis custodiet ipsos
+custodes ?* — qui dira que les choix qu'on fait pour rendre le modèle
+équitable sont eux-mêmes équitables ?
 
 <!-- PAGEBREAK -->
 
@@ -227,22 +222,22 @@ rédaction. Code revu, testé, exécuté par les auteurs.
 
 ### A.2 Références
 
-Dai, E. & Wang, S. (2021). *Say No to the Discrimination — Learning Fair
-Graph Neural Networks with Limited Sensitive Attribute Information*.
-WSDM. — Hardt, M., Price, E. & Srebro, N. (2016). *Equality of
-Opportunity in Supervised Learning*. NeurIPS. — Ravfogel, S. et al.
-(2020). *Null It Out — Guarding Protected Attributes by Iterative
-Nullspace Projection*. ACL. — Ganin, Y. & Lempitsky, V. (2015).
-*Unsupervised Domain Adaptation by Backpropagation* (origine du
-Gradient Reversal Layer). — Kamiran, F. & Calders, T. (2012). *Data
-Preprocessing Techniques for Classification without Discrimination*.
-KAIS. — Chouldechova, A. (2017) ; Kleinberg, J. et al. (2017). Théorèmes
-d'incompatibilité ΔDP / ΔEO. — Crenshaw, K. (1989). *Demarginalizing the
-Intersection of Race and Sex*. — Hoffmann, A. L. (2019). *Where
-Fairness Fails*. — Hanna, A. et al. (2020). *Towards a Critical Race
-Methodology in Algorithmic Fairness*. FAccT. — Newman, M. E. J. (2003).
-*Mixing Patterns in Networks*. — Laclau, C., Largeron, C. & Choudhary,
-M. (2024). *A Survey on Fairness for Machine Learning on Graphs*.
+- Dai, E. & Wang, S. (2021). *Say No to the Discrimination — Learning
+  Fair Graph Neural Networks with Limited Sensitive Attribute Information*.
+  WSDM. — méthode FairGNN.
+- Hardt, M., Price, E. & Srebro, N. (2016). *Equality of Opportunity in
+  Supervised Learning*. NeurIPS. — DPT / EOT.
+- Ravfogel, S. et al. (2020). *Null It Out — Guarding Protected
+  Attributes by Iterative Nullspace Projection*. ACL. — INLP.
+- Newman, M. E. J. (2003). *Mixing Patterns in Networks*. — coefficient
+  d'assortativité utilisé pour `r(s)`.
+- Chouldechova, A. (2017) ; Kleinberg, J. et al. (2017). Théorèmes
+  d'incompatibilité entre métriques de fairness.
+- Crenshaw, K. (1989). *Demarginalizing the Intersection of Race and
+  Sex*. — argument intersectionnel.
+- Hoffmann, A. L. (2019). *Where Fairness Fails — Data, Algorithms, and
+  the Limits of Antidiscrimination Discourse*. — meta-critique de la
+  fairness ML.
 
 ### A.3 Comparaison méthodes × axe gender (Pokec-z, seed=42)
 
