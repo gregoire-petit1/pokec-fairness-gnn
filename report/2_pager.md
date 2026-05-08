@@ -203,21 +203,25 @@ fairness-on-graphs slovaque sans label ethnique reste le standard de
 la littérature, l'évaluation des méthodes restera détachée des axes de
 discrimination qui comptent vraiment dans le pays d'origine de la donnée.
 
-**Outils d'IA** : assistance algorithmique pour la réimplémentation
-FairGNN-GRL, la migration pandas → polars, l'intégration TabICL, l'ajout
-des modules INLP / calibration / reweighting, et la rédaction. Code revu,
-testé, exécuté par les auteurs.
-
-**Références.** Hardt-Price-Srebro 2016 ; Ravfogel et al. 2020 ; Ganin &
-Lempitsky 2015 ; Dai & Wang 2021 ; Kamiran & Calders 2012 ; Chouldechova
-2017 ; Crenshaw 1989 ; Hoffmann 2019 ; Hanna et al. 2020 (FAccT) ;
-Newman 2003 ; Qu et al. 2025 (TabICL) ; Laclau et al. 2024.
-
 ---
 
-## Annexe — Tableaux détaillés
+## Annexe
 
-### A.1 Comparaison méthodes × axes (Pokec-z, seed=42)
+### A.1 Outils d'IA
+
+Assistance algorithmique pour la réimplémentation FairGNN-GRL, la
+migration pandas → polars, l'intégration TabICL, l'ajout des modules
+INLP / calibration / reweighting, et la rédaction. Code revu, testé,
+exécuté par les auteurs.
+
+### A.2 Références
+
+Hardt-Price-Srebro 2016 ; Ravfogel et al. 2020 ; Ganin & Lempitsky 2015 ;
+Dai & Wang 2021 ; Kamiran & Calders 2012 ; Chouldechova 2017 ; Crenshaw
+1989 ; Hoffmann 2019 ; Hanna et al. 2020 (FAccT) ; Newman 2003 ; Qu et
+al. 2025 (TabICL) ; Laclau et al. 2024.
+
+### A.3 Comparaison méthodes × axes (Pokec-z, seed=42)
 
 Source : `results/metrics/comparison_full.csv`. Acc et F1 sont identiques
 par modèle (même prédicteur sur tous les axes) ; ΔDP/ΔEO/Leakage varient
@@ -246,7 +250,7 @@ par axe.
 | TabICL+INLP+DPT@gender | gender | 0.9429 | 0.9427 | **0.0009** | 0.0188 | 0.7115 |
 | **TabICL+ULTIMATE-LATENT** (Pokec-z, μ 5 seeds : F1 ± σ = 0.884 ± 0.025 ; Pokec-n : 0.657 ± 0.214 brittle) | gender | 0.8898 | 0.8888 | 0.0057 | 0.0094 | 0.5545 |
 
-### A.2 ULTIMATE composite — un seul fit règle TOUT (Pokec-z, seed=42)
+### A.4 ULTIMATE composite — un seul fit règle TOUT (Pokec-z, seed=42)
 
 Source : `results/metrics/comparison_full.csv`. Une seule chaîne
 `INLP_composite + DPT_composite` à 12 cellules calibrée sur l'attribut

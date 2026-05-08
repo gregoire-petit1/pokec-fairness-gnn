@@ -270,21 +270,25 @@ label ethnique reste le standard de la littérature, l'évaluation des
 méthodes restera détachée des axes de discrimination qui comptent vraiment
 dans le pays d'origine de la donnée.
 
-\textbf{Outils d'IA} : assistance algorithmique pour la réimplémentation
-FairGNN-GRL, la migration pandas $\to$ polars, l'intégration TabICL,
-l'ajout des modules INLP / calibration / reweighting, et la rédaction.
-Code revu, testé, exécuté par les auteurs.
-
-\textbf{Références.} Hardt-Price-Srebro 2016 ; Ravfogel et al.\ 2020 ;
-Ganin \& Lempitsky 2015 ; Dai \& Wang 2021 ; Kamiran \& Calders 2012 ;
-Chouldechova 2017 ; Crenshaw 1989 ; Hoffmann 2019 ; Hanna et al.\ 2020
-(FAccT) ; Newman 2003 ; Qu et al.\ 2025 (TabICL) ; Laclau et al.\ 2024.
-
 \newpage
 
-\section*{Annexe — Tableaux détaillés}
+\section*{Annexe}
 
-\subsection*{A.1 Comparaison méthodes $\times$ axes (Pokec-z, seed=42)}
+\subsection*{A.1 Outils d'IA}
+
+Assistance algorithmique pour la réimplémentation FairGNN-GRL, la
+migration pandas $\to$ polars, l'intégration TabICL, l'ajout des
+modules INLP / calibration / reweighting, et la rédaction. Code revu,
+testé, exécuté par les auteurs.
+
+\subsection*{A.2 Références}
+
+Hardt-Price-Srebro 2016 ; Ravfogel et al.\ 2020 ; Ganin \& Lempitsky
+2015 ; Dai \& Wang 2021 ; Kamiran \& Calders 2012 ; Chouldechova 2017 ;
+Crenshaw 1989 ; Hoffmann 2019 ; Hanna et al.\ 2020 (FAccT) ; Newman
+2003 ; Qu et al.\ 2025 (TabICL) ; Laclau et al.\ 2024.
+
+\subsection*{A.3 Comparaison méthodes $\times$ axes (Pokec-z, seed=42)}
 
 Source : \texttt{results/metrics/comparison\_full.csv}. Acc et F1 sont
 identiques par modèle (même prédicteur sur tous les axes) ;
@@ -323,7 +327,7 @@ TabICL+INLP+DPT@gender & gender & 0.9429 & 0.9427 & \textbf{0.0009} & 0.0188 & 0
 5 seeds Pokec-z : F1 = 0.884 $\pm$ 0.025 ; sur Pokec-n : 0.657 $\pm$
 0.214 (3 seeds sur 5 collapsent à F1 = 0.41 / 0.49 / 0.60). \normalsize
 
-\subsection*{A.2 ULTIMATE composite — un seul fit règle TOUT (Pokec-z, seed=42)}
+\subsection*{A.4 ULTIMATE composite — un seul fit règle TOUT (Pokec-z, seed=42)}
 
 Source : \texttt{results/metrics/comparison\_full.csv}. Une seule chaîne
 \texttt{INLP\_composite + DPT\_composite} à 12 cellules calibrée sur
