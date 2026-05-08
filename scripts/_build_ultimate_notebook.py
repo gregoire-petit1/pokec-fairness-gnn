@@ -195,7 +195,7 @@ Avec gender ∈ {0,1}, age_group ∈ {0,1,2}, region ∈ {0,1}, on obtient
 12 classes), DPT calibrera un seuil par cellule.
 
 **Pourquoi un composite ?** Calibrer mono-axe (par ex. gender seul) laisse
-fuiter sur les axes croisés (effet *whack-a-mole* de Crenshaw 1989). Le
+fuiter sur les axes croisés (effet *whack-a-mole* intersectionnel). Le
 composite couvre toutes les intersections en un seul fit."""
         )
     )
@@ -467,9 +467,9 @@ print(df_axes)"""
 ## Étape 9 — Autres traitements de la toolbox
 
 Pour comparer ULTIMATE aux autres méthodes post-process :
-- **EOT @gender** (Hardt 2016) : seuil par groupe gender pour égaliser le TPR.
+- **EOT @gender** : seuil par groupe gender pour égaliser le TPR.
 - **DPT @gender** : seuil par groupe gender pour égaliser le taux positif.
-- **INLP @gender** (Ravfogel 2020) : projette `x` orthogonalement à la
+- **INLP @gender** : projette `x` orthogonalement à la
   direction gender uniquement, puis re-fit TabICL.
 - **INLP+DPT @gender** : compose INLP et DPT sur le seul axe gender.
 
@@ -500,7 +500,7 @@ def calibrate_dpt(proba_pos_val, sensitive_val, grid_size=51):
 
 
 def calibrate_eot(proba_pos_val, y_val, sensitive_val, grid_size=51):
-    \"\"\"Per-group threshold calibrated for equal TPR (Hardt 2016).\"\"\"
+    \"\"\"Per-group threshold calibrated for equal TPR.\"\"\"
     grid = np.linspace(0.0, 1.0, grid_size, dtype=np.float32)
     pos_mask_global = y_val == 1
     global_tpr = float((proba_pos_val[pos_mask_global] > 0.5).mean())
@@ -542,7 +542,7 @@ print("Helpers DPT / EOT / metrics_5axes définis.")"""
     nb.cells.append(
         md(
             """\
-### 9.1 — EOT @gender (Hardt-Price-Srebro 2016)
+### 9.1 — EOT @gender
 
 Calibrage de seuils par groupe gender pour **égaliser le TPR**.
 Cible : ΔEO → 0. Aucun effet sur le leakage (les embeddings ne changent pas)."""
@@ -671,7 +671,7 @@ Comparaison côte-à-côte des 6 chaînes : baseline + 4 méthodes mono-axe
 
 **Lecture** :
 - Mono-axe (EOT, DPT, INLP, INLP+DPT) : règlent un aspect mais laissent
-  fuiter sur les axes croisés (effet whack-a-mole de Crenshaw).
+  fuiter sur les axes croisés (effet whack-a-mole intersectionnel).
 - ULTIMATE composite : règle simultanément les 5 axes, au prix de ~8 pp
   de F1 vs baseline."""
         )
