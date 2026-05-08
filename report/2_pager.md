@@ -5,7 +5,11 @@
 ## 1. Setup
 
 **Données.** Pokec-z (subset officiel FairGNN, *Žilinský kraj*) : 66 569
-nœuds, ~729 k arêtes, 264 features tabulaires. Reproduction sur **Pokec-n**.
+nœuds, ~729 k arêtes, 264 features tabulaires. **Pokec-n** est le subset
+sœur sur une autre région slovaque (Nitriansky kraj) — même collecte,
+même format, même cible, même schéma sensible — utilisé comme reproduction
+intra-dataset pour vérifier la stabilité, pas comme validation
+cross-dataset au sens strict.
 Cible : `completed_level_of_education_indicator` (binaire, 47.7 % positif).
 Attributs sensibles : `gender`, `region` (binaires), `age_group` (3 classes),
 plus les intersections `gender × age_group` et `gender × region` — soit
@@ -18,10 +22,11 @@ plus les intersections `gender × age_group` et `gender × region` — soit
 - *Baselines* : GraphSAGE (2 SAGE, hidden=256, dropout=0.5), **TabICL**
   (foundation tabulaire INRIA 2025, no graph, frozen).
 - *Pre-process* : Resampling, FairDrop, Reweighting Kamiran-Calders 2012.
-- *In-training* : **FairGNN avec Gradient Reversal Layer** — réimpl propre
-  de Dai & Wang 2021. La version originale combinait `l_cls − λ·l_adv`
-  dans un seul optimiseur (pas du min-max), F1 collapsait à 0.4834 à
-  certains λ.
+- *In-training* : **FairGNN** (Dai & Wang 2021), méthode adversariale
+  qui décourage l'encoder d'apprendre des directions corrélées au sensible.
+  L'implémentation de départ du repo amont avait un défaut d'entraînement
+  adversarial ; on l'a remplacée par une variante avec **Gradient Reversal
+  Layer** pour stabiliser.
 - *Post-process* : EOT (Hardt 2016), DPT (Demographic Parity Threshold),
   **INLP** (Ravfogel 2020) sur embeddings et features, et **les
   compositions INLP+DPT et leur version multi-axes simultanée**.
@@ -108,8 +113,10 @@ aurait dû nous orienter vers TabICL avant même de lancer GraphSAGE.
 
 La validation multi-seed `[3, 7, 21, 42, 99]` confirme la stabilité : ΔDP
 gender ULTIMATE = 0.006 ± 0.005 ; leakage gender = 0.500 ± 0.010 ; F1 =
-0.87 à dispersion marginale sur TabICL. La reproduction sur Pokec-n donne
-les mêmes chiffres à un écart inférieur à 0.01.
+0.87 à dispersion marginale sur TabICL. La reproduction sur Pokec-n
+(subset sœur même réseau, autre région) donne les mêmes chiffres à un
+écart inférieur à 0.01 — bonne stabilité intra-dataset, ce n'est pas
+une validation cross-dataset au sens strict.
 
 ## 4. Compromis perf ↔ équité ↔ robustesse
 
@@ -180,11 +187,14 @@ donc pas Pareto-dominant** et la chaîne sur `x` brut reste le bon choix
 pour la robustesse cross-dataset (chiffres détaillés en annexe).
 
 **Limite de généralisation.** Pokec-z et Pokec-n sont deux subsets du
-même réseau slovaque, et la cible `completed_level_of_education_indicator`
-est faiblement homophile en gender (`r ≈ -0.046`). Nos conclusions sur
-"TabICL bat GraphSAGE" et "post-process suffit" sont conditionnelles à
-cette propriété : sur un graphe fortement homophile à l'attribut
-sensible, le classement s'inverserait probablement.
+même réseau slovaque sur des régions différentes — c'est de la
+reproduction *intra-dataset*, pas du cross-dataset. Pour valider hors de
+Pokec, il faudrait Bail / Credit / German Credit re-graphifiés. La cible
+`completed_level_of_education_indicator` est faiblement homophile en
+gender (`r ≈ -0.046`) ; nos conclusions sur "TabICL bat GraphSAGE" et
+"post-process suffit" sont conditionnelles à cette propriété — sur un
+graphe fortement homophile à l'attribut sensible, le classement
+s'inverserait probablement.
 
 **Pour conclure.** Si on prend du recul sur l'ensemble du projet, le
 choix d'axe sensible est probablement la limite la plus structurante.

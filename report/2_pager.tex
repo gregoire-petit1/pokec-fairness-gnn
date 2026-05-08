@@ -51,8 +51,11 @@
 \section{Setup}
 
 \textbf{Données.} Pokec-z (subset officiel FairGNN, \textit{Žilinský kraj}) :
-66\,569 nœuds, $\sim$729\,k arêtes, 264 features tabulaires. Reproduction sur
-\textbf{Pokec-n}. Cible : \texttt{completed\_level\_of\_education\_indicator}
+66\,569 nœuds, $\sim$729\,k arêtes, 264 features tabulaires.
+\textbf{Pokec-n} est le subset sœur sur une autre région slovaque (même
+collecte, même format, même cible) — utilisé comme reproduction
+intra-dataset, pas comme validation cross-dataset au sens strict.
+Cible : \texttt{completed\_level\_of\_education\_indicator}
 (binaire, 47.7\,\% positif). Attributs sensibles : \texttt{gender},
 \texttt{region} (binaires), \texttt{age\_group} (3 classes), plus les
 intersections \texttt{gender}\,$\times$\,\texttt{age\_group} et
@@ -172,7 +175,9 @@ de lancer GraphSAGE.
 La validation multi-seed \texttt{[3, 7, 21, 42, 99]} confirme la stabilité :
 $\Delta$DP gender ULTIMATE = $0.006 \pm 0.005$ ; leakage gender =
 $0.500 \pm 0.010$ ; F1 = 0.87 à dispersion marginale sur TabICL. La
-reproduction sur Pokec-n donne les mêmes chiffres à un écart inférieur à 0.01.
+reproduction sur Pokec-n (subset sœur, autre région) donne les mêmes
+chiffres à un écart inférieur à 0.01 — bonne stabilité intra-dataset,
+pas une validation cross-dataset au sens strict.
 
 \section{Compromis perf $\leftrightarrow$ équité $\leftrightarrow$ robustesse}
 
@@ -245,12 +250,14 @@ embedding 512-dim supprime trop de directions utiles sur Pokec-n.
 sur \texttt{x} brut reste le bon choix pour la robustesse cross-dataset
 (chiffres détaillés en annexe).
 
-\textbf{Limite de généralisation.} Pokec-z et Pokec-n sont deux subsets du
-même réseau slovaque, et la cible
-\texttt{completed\_level\_of\_education\_indicator} est faiblement homophile
-en gender ($r \approx -0.046$). Nos conclusions sur ``TabICL bat
-GraphSAGE'' et ``post-process suffit'' sont conditionnelles à cette
-propriété : sur un graphe fortement homophile à l'attribut sensible, le
+\textbf{Limite de généralisation.} Pokec-z et Pokec-n sont deux subsets
+du même réseau Pokec sur des régions slovaques différentes — c'est de la
+reproduction \emph{intra-dataset}, pas du cross-dataset au sens strict
+(pour ça il faudrait Bail / Credit re-graphifiés). La cible
+\texttt{completed\_level\_of\_education\_indicator} est faiblement
+homophile en gender ($r \approx -0.046$) ; nos conclusions sur ``TabICL
+bat GraphSAGE'' et ``post-process suffit'' sont conditionnelles à cette
+propriété — sur un graphe fortement homophile à l'attribut sensible, le
 classement s'inverserait probablement.
 
 \textbf{Pour conclure.} Si on prend du recul sur l'ensemble du projet, le

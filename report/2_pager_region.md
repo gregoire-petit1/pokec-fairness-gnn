@@ -5,7 +5,9 @@
 ## 1. Setup
 
 **Données.** Pokec-z (subset officiel FairGNN, *Žilinský kraj*) : 66 569
-nœuds, ~729 k arêtes, 264 features tabulaires. Reproduction sur **Pokec-n**.
+nœuds, ~729 k arêtes, 264 features tabulaires. **Pokec-n** = subset sœur
+sur une autre région slovaque (reproduction intra-dataset, pas
+cross-dataset).
 Cible : `completed_level_of_education_indicator` (binaire, 47.7 % positif).
 Attributs sensibles : `gender`, `region` (binaires), `age_group`
 (3 classes), plus les intersections gender × age et gender × region — soit
@@ -120,13 +122,10 @@ F1=0.87 ; GraphSAGE chute à 0.59 (perte 35 pp). À droite : leakage moyen
 descend à 0.50 (chance) sur les deux.*
 
 Le pipeline ULTIMATE atteint **leakage ≈ 0.50 sur les 5 axes simultanément**
-(ΔDP < 0.05 partout) au prix de 8 pp de F1 sur TabICL. GraphSAGE+ULTIMATE
-s'écrase (F1 → 0.59), confirmation indirecte que ses embeddings sont
-saturés en region (cohérent avec `r(region) = 0.9`).
-
-Multi-seed `[3, 7, 21, 42, 99]` × Pokec-z/n confirme la stabilité :
-ΔDP gender ULTIMATE = 0.006 ± 0.005, F1 = 0.87 dispersion marginale,
-reproduction Pokec-n à <0.01 près.
+(ΔDP < 0.05 partout) au prix de 8 pp de F1 sur TabICL.
+GraphSAGE+ULTIMATE s'écrase (F1 → 0.59) : ses embeddings sont saturés en
+region (cohérent avec `r(region) = 0.9`). Multi-seed × Pokec-z/n confirme
+la stabilité (ΔDP gender = 0.006 ± 0.005, F1 = 0.87 dispersion marginale).
 
 ## 5. Compromis perf ↔ équité ↔ robustesse
 
@@ -181,22 +180,22 @@ dans `TabICLCache.row_repr` puis ré-injecté dans `icl_predictor`) gagne
 Pareto-dominante, pipeline x-brut reste préféré (chiffres en annexe A.5).
 
 **Limite de généralisation.** Pokec-z et Pokec-n sont deux subsets du même
-réseau slovaque, et la cible `completed_level_of_education_indicator` est
-faiblement homophile en gender. Nos conclusions sur "le graphe amplifie
+réseau Pokec sur des régions slovaques différentes — c'est de la
+reproduction intra-dataset, pas du cross-dataset au sens strict (pour ça
+il faudrait Bail / Credit re-graphifiés). La cible
+`completed_level_of_education_indicator` est faiblement homophile en
+gender. Nos conclusions sur "le graphe amplifie
 peu sur ce dataset" sont conditionnelles à cette propriété.
 
 **Pour conclure.** Le choix d'axe sensible est probablement la limite la
-plus structurante du projet. Dans un contexte d'Europe centrale, et
-particulièrement en Slovaquie, l'axe ethnique — minorité hongroise et
-surtout minorité gitane — est beaucoup plus prévalent comme source de
-discrimination effective que l'axe du sexe sur lequel on a passé la
-majeure partie de l'étude. Logement, accès à l'éducation, embauche : c'est
-sur ces axes-là que les disparités mesurables sont les plus fortes en
-Slovaquie. Le verrou principal n'est plus algorithmique — il est en amont,
-au niveau de la collecte et de la curation des données. Tant qu'un dataset
-fairness-on-graphs slovaque sans label ethnique reste le standard de la
-littérature, l'évaluation des méthodes restera détachée des axes de
-discrimination qui comptent vraiment dans le pays d'origine de la donnée.
+plus structurante. Dans le contexte slovaque, l'axe ethnique — minorité
+hongroise et surtout minorité gitane — est beaucoup plus prévalent comme
+source de discrimination effective (logement, éducation, embauche) que
+le sexe sur lequel on a passé l'essentiel de l'étude. Le verrou principal
+n'est pas algorithmique mais en amont, au niveau de la curation des
+données. Tant qu'un dataset slovaque sans label ethnique reste le
+standard, l'évaluation des méthodes restera détachée des axes qui
+comptent vraiment dans le pays d'origine de la donnée.
 
 <!-- PAGEBREAK -->
 

@@ -1,0 +1,6 @@
+dataset,seed,method,axis,lambda_chosen,acc,f1_macro,delta_dp,delta_eo,leakage_auc
+pokec-z,42,FairGNN_two_opt_adv_region,gender,0.1,0.9353,0.9351,0.0422,0.0298,0.7032
+pokec-z,42,FairGNN_two_opt_adv_region,region,0.1,0.9353,0.9351,0.0456,0.0035,0.6661
+pokec-z,42,FairGNN_two_opt_adv_region,age_group,0.1,0.9353,0.9351,0.0593,0.0542,0.8409
+pokec-z,42,FairGNN_two_opt_adv_region,gender_x_age,0.1,0.9353,0.9351,0.0844,0.0804,0.7982
+pokec-z,42,FairGNN_two_opt_adv_region,gender_x_region,0.1,0.9353,0.9351,0.0839,0.0335,0.6782
