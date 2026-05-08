@@ -104,6 +104,9 @@ def run_one(
                 "n_train": result.n_train,
                 "n_test": result.n_test,
                 "embed_dim": result.embed_dim,
+                "acc_baseline": result.acc_baseline,
+                "acc_after_inlp": result.acc_after_inlp,
+                "acc_drop": result.acc_drop,
                 "f1_baseline": result.f1_baseline,
                 "f1_after_inlp": result.f1_after_inlp,
                 "f1_drop": result.f1_drop,
@@ -152,8 +155,9 @@ def main() -> None:
             for row in rows:
                 print(
                     f"  {row['axis']:18s} "
-                    f"f1={row['f1_baseline']:.3f}->{row['f1_after_inlp']:.3f} (Δ{row['f1_drop']:+.3f})  "
-                    f"leak={row['leakage_pre']:.3f}->{row['leakage_post']:.3f} (Δ{row['leakage_drop']:+.3f})",
+                    f"acc={row['acc_baseline']:.3f}->{row['acc_after_inlp']:.3f} "
+                    f"f1={row['f1_baseline']:.3f}->{row['f1_after_inlp']:.3f}  "
+                    f"leak={row['leakage_pre']:.3f}->{row['leakage_post']:.3f}",
                     flush=True,
                 )
             all_rows.extend(rows)

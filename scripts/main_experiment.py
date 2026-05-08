@@ -1049,6 +1049,8 @@ def compute_multi_attr_fairness(
             {
                 "model": out.name,
                 "attribute": sname,
+                "accuracy": round(out.acc, 4),
+                "f1_macro": round(out.f1, 4),
                 "delta_dp": round(ddp, 4),
                 "delta_eo": round(deo, 4),
                 "group_auc_gap": round(gap, 4) if not np.isnan(gap) else None,

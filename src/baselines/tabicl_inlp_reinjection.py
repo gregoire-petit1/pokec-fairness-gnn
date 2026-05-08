@@ -37,7 +37,7 @@ from dataclasses import dataclass
 import numpy as np
 import torch
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import f1_score, roc_auc_score
+from sklearn.metrics import accuracy_score, f1_score, roc_auc_score
 from tabicl import TabICLClassifier
 
 from src.postprocess.inlp import inlp
@@ -45,16 +45,22 @@ from src.postprocess.inlp import inlp
 
 @dataclass
 class ReinjectionResult:
-    """End-to-end metrics : F1 retention and leakage AUC pre/post INLP."""
+    """End-to-end metrics : F1, accuracy retention and leakage AUC pre/post INLP."""
 
     axis: str
     n_train: int
     n_test: int
     embed_dim: int
+    acc_baseline: float
+    acc_after_inlp: float
     f1_baseline: float
     f1_after_inlp: float
     leakage_pre: float
     leakage_post: float
+
+    @property
+    def acc_drop(self) -> float:
+        return self.acc_baseline - self.acc_after_inlp
 
     @property
     def f1_drop(self) -> float:
@@ -164,9 +170,10 @@ def run_inlp_reinjection(
     )
     clf.fit(x_train, y_train)
 
-    # Baseline F1 (no INLP, vanilla TabICL).
+    # Baseline accuracy + macro F1 (no INLP, vanilla TabICL).
     proba_baseline = clf.predict_proba(x_test)
     pred_baseline = proba_baseline.argmax(axis=1)
+    acc_baseline = float(accuracy_score(y_test, pred_baseline))
     f1_baseline = float(f1_score(y_test, pred_baseline, average="macro"))
 
     # Capture embeddings on a separate predict_proba pass. This re-enters the
@@ -216,6 +223,7 @@ def run_inlp_reinjection(
         clf.model_.row_interactor.forward = original_forward
 
     pred_after = proba_after.argmax(axis=1)
+    acc_after = float(accuracy_score(y_test, pred_after))
     f1_after = float(f1_score(y_test, pred_after, average="macro"))
 
     return ReinjectionResult(
@@ -223,6 +231,8 @@ def run_inlp_reinjection(
         n_train=int(train_emb.shape[0]),
         n_test=int(test_emb.shape[0]),
         embed_dim=int(train_emb.shape[1]),
+        acc_baseline=acc_baseline,
+        acc_after_inlp=acc_after,
         f1_baseline=f1_baseline,
         f1_after_inlp=f1_after,
         leakage_pre=leakage_pre,
