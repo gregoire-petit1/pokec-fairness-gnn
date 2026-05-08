@@ -5,9 +5,7 @@
 ## 1. Setup
 
 **Données.** Pokec-z (subset officiel FairGNN, *Žilinský kraj*) : 66 569
-nœuds, ~729 k arêtes, 264 features tabulaires. **Pokec-n** = subset sœur
-sur une autre région slovaque (reproduction intra-dataset, pas
-cross-dataset au sens strict).
+nœuds, ~729 k arêtes, 264 features tabulaires.
 
 **Cible.** `completed_level_of_education_indicator` (binaire, 47.7 %
 positif). **Attributs sensibles** : `gender`, `region` (binaires),
@@ -141,9 +139,9 @@ INLP+DPT), soit utiliser un encoder dont les embeddings ne sont pas
 saturés par l'attribut sensible dominant — au-delà du périmètre des
 méthodes fairness-on-graphs étudiées ici.
 
-Multi-seed `[3, 7, 21, 42, 99]` × Pokec-z/n confirme la stabilité du
-finding : ΔDP gender ULTIMATE = 0.006 ± 0.005, leakage ≈ 0.50 ± 0.01,
-F1 collapse stable. Reproduction Pokec-n à <0.01 près (intra-dataset).
+Multi-seed `[3, 7, 21, 42, 99]` confirme la stabilité du finding :
+ΔDP gender ULTIMATE = 0.006 ± 0.005, leakage ≈ 0.50 ± 0.01, F1 collapse
+stable.
 
 ## 5. Compromis perf ↔ équité ↔ robustesse
 
