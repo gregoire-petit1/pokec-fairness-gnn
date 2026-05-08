@@ -230,14 +230,19 @@ que contre un classifieur linéaire ; un MLP probe non-linéaire pourrait
 recouvrir du signal résiduel. Côté FairGNN, le discriminateur adversarial
 est binaire dans la formulation standard de Dai \& Wang : pour faire de la
 fairness sur \texttt{age\_group} (3 classes) en in-training, il faudrait
-redimensionner la tête de discriminateur, ce qu'on n'a pas implémenté. Côté
-TabICL, ULTIMATE applique INLP sur \texttt{x} brut par simplicité ; or les
-embeddings sont accessibles via \texttt{TabICLCache.row\_repr}. Validation
-multi-seed $\times$ Pokec-z/n : INLP sur embeddings tombe le leakage gender
-à \textbf{0.61-0.63} vs 0.71 sur \texttt{x} brut, avec reproduction
-cross-dataset à $<$0.02 près
-(\texttt{results/metrics/tabicl\_inlp\_embedding.csv}). Ré-injection dans le
-prédicteur pour valider F1 retention : prochaine étape.
+redimensionner la tête de discriminateur, ce qu'on n'a pas implémenté.
+Côté TabICL, ULTIMATE applique INLP sur \texttt{x} brut alors que les
+embeddings sont accessibles via \texttt{TabICLCache.row\_repr}. On a testé
+la chaîne complète \textbf{ULTIMATE-LATENT} (INLP composite + DPT
+composite ré-injectés dans \texttt{icl\_predictor}) en multi-seed $\times$
+Pokec-z/n. Verdict : sur Pokec-z, F1 retention légèrement meilleure
+(+1.8 pp à 0.884 vs 0.866), mais sur Pokec-n \textbf{3 seeds sur 5
+collapsent} (F1 = 0.41 / 0.49 / 0.60 contre 0.94 baseline) — la moyenne
+0.66 masque cette brittleness. La projection composite dans l'espace
+embedding 512-dim supprime trop de directions utiles sur Pokec-n.
+\textbf{ULTIMATE-LATENT n'est donc pas Pareto-dominant} et la chaîne
+sur \texttt{x} brut reste le bon choix pour la robustesse cross-dataset
+(chiffres détaillés en annexe).
 
 \textbf{Limite de généralisation.} Pokec-z et Pokec-n sont deux subsets du
 même réseau slovaque, et la cible
@@ -273,5 +278,86 @@ et la rédaction. Code revu, testé, exécuté par les auteurs.
 Ganin \& Lempitsky 2015 ; Dai \& Wang 2021 ; Kamiran \& Calders 2012 ;
 Chouldechova 2017 ; Crenshaw 1989 ; Hoffmann 2019 ; Hanna et al.\ 2020
 (FAccT) ; Newman 2003 ; Qu et al.\ 2025 (TabICL) ; Laclau et al.\ 2024.
+
+\newpage
+
+\section*{Annexe — Tableaux détaillés}
+
+\subsection*{A.1 Comparaison méthodes $\times$ axes (Pokec-z, seed=42)}
+
+Source : \texttt{results/metrics/comparison\_full.csv}. Lecture : les
+colonnes \textbf{Acc} et \textbf{F1} sont identiques par modèle (même
+prédicteur sur tous les axes, c'est l'éval qui change). $\Delta$DP /
+$\Delta$EO / Leakage varient par axe.
+
+\begin{center}\footnotesize
+\begin{tabular}{l l r r r r r}
+\toprule
+\textbf{Modèle} & \textbf{Attribut} & \textbf{Acc} & \textbf{F1} & \textbf{$\Delta$DP} & \textbf{$\Delta$EO} & \textbf{Leakage} \\
+\midrule
+GraphSAGE & gender & 0.9383 & 0.9381 & 0.0429 & 0.0231 & 0.8120 \\
+GraphSAGE & region & 0.9383 & 0.9381 & 0.0532 & 0.0042 & 0.6411 \\
+GraphSAGE & age\_group & 0.9383 & 0.9381 & 0.0560 & 0.0380 & 0.8908 \\
+GraphSAGE & gender $\times$ age & 0.9383 & 0.9381 & 0.0872 & 0.0642 & 0.8538 \\
+GraphSAGE & gender $\times$ region & 0.9383 & 0.9381 & 0.0929 & 0.0311 & 0.7273 \\
+GraphSAGE+Resampling & gender & 0.9383 & 0.9381 & 0.0423 & 0.0229 & 0.8109 \\
+GraphSAGE+FairDrop & gender & 0.9386 & 0.9384 & 0.0442 & 0.0253 & 0.8250 \\
+FairGNN ($\lambda$=5.0) & gender & 0.8533 & 0.8532 & \textbf{0.0090} & 0.0114 & 0.8618 \\
+FairGNN ($\lambda$=5.0) & gender $\times$ age & 0.8533 & 0.8532 & 0.1535 & 0.0435 & 0.8328 \\
+TabICL & gender & \textbf{0.9486} & \textbf{0.9484} & 0.0408 & 0.0247 & 0.8819 \\
+TabICL & region & 0.9486 & 0.9484 & 0.0493 & 0.0014 & 0.6208 \\
+TabICL & age\_group & 0.9486 & 0.9484 & 0.0591 & 0.0254 & 0.9919 \\
+TabICL & gender $\times$ age & 0.9486 & 0.9484 & 0.0916 & 0.0524 & 0.9392 \\
+GraphSAGE+EOT@gender & gender & 0.9393 & 0.9392 & \textbf{0.0191} & \textbf{0.0001} & 0.8120 \\
+\textbf{TabICL+EOT@gender} & \textbf{gender} & \textbf{0.9461} & \textbf{0.9459} & \textbf{0.0071} & 0.0090 & 0.8819 \\
+GraphSAGE+INLP@gender & gender & 0.9317 & 0.9316 & 0.0428 & 0.0243 & \textbf{0.5726} \\
+TabICL+INLP@gender & gender & 0.9461 & 0.9459 & 0.0371 & 0.0249 & 0.7115 \\
+GraphSAGE+INLP+DPT@gender & gender & 0.9320 & 0.9319 & \textbf{0.0032} & 0.0078 & \textbf{0.5726} \\
+TabICL+INLP+DPT@gender & gender & 0.9429 & 0.9427 & \textbf{0.0009} & 0.0188 & 0.7115 \\
+\textbf{GraphSAGE+ULTIMATE} & gender & 0.6155 & 0.5915 & 0.0090 & 0.0248 & \textbf{0.4996} \\
+\textbf{TabICL+ULTIMATE} & gender & \textbf{0.8659} & \textbf{0.8657} & 0.0134 & 0.0008 & \textbf{0.5059} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection*{A.2 ULTIMATE-LATENT vs ULTIMATE-x-brut — multi-seed [3, 7, 21, 42, 99]}
+
+Source : \texttt{results/metrics/tabicl\_inlp\_reinjection\_composite.csv}.
+ULTIMATE-LATENT projette dans \texttt{row\_repr} (512 dim) et ré-injecte
+dans \texttt{icl\_predictor} ; ULTIMATE-x-brut applique INLP sur
+\texttt{x} (264 dim) et utilise une LR séparée. \textbf{F1 par seed} :
+
+\begin{center}\footnotesize
+\begin{tabular}{l r r r}
+\toprule
+\textbf{Dataset} & \textbf{Seed} & \textbf{F1 baseline} & \textbf{F1 ULTIMATE-LATENT} \\
+\midrule
+pokec-z & 3 & 0.948 & 0.895 \\
+pokec-z & 7 & 0.945 & 0.884 \\
+pokec-z & 21 & 0.950 & 0.910 \\
+pokec-z & 42 & 0.946 & 0.889 \\
+pokec-z & 99 & 0.948 & 0.840 \\
+pokec-n & 3 & 0.947 & \textbf{0.598} \\
+pokec-n & 7 & 0.946 & 0.914 \\
+pokec-n & 21 & 0.948 & 0.870 \\
+pokec-n & 42 & 0.945 & \textbf{0.411} \\
+pokec-n & 99 & 0.947 & \textbf{0.493} \\
+\bottomrule
+\end{tabular}
+\hspace{1.5em}
+\begin{tabular}{l r r}
+\toprule
+\textbf{Dataset} & \textbf{x-brut} & \textbf{LATENT ($\mu \pm \sigma$)} \\
+\midrule
+pokec-z & 0.866 & 0.884 $\pm$ 0.025 \\
+pokec-n & 0.866 & \textbf{0.657 $\pm$ 0.214} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+ULTIMATE-LATENT gagne 1.8 pp de F1 sur Pokec-z mais s'effondre sur 3 des
+5 seeds Pokec-n (F1 entre 0.41 et 0.60). La cross-dataset reproduction
+ne tient pas. Le pipeline de référence (ULTIMATE-x-brut) reste le bon
+choix.
 
 \end{document}
