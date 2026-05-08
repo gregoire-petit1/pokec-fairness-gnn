@@ -37,7 +37,7 @@ Notre résultat empirique principal sur cette première dimension est que
 attaque une partie spécifique du problème, et il faut souvent en composer
 plusieurs pour traiter les trois métriques en même temps.
 
-![Fig 1](results/figures/fig1_toolbox_per_metric.png)
+![Fig 1](fig1_toolbox_per_metric.png)
 
 *Fig 1. Mêmes méthodes, 3 métriques. **DPT** (bleu) écrase ΔDP à 0.004
 mais ne touche pas le leakage. **INLP** (vert) tombe le leakage à 0.71
@@ -77,7 +77,7 @@ simultanément** (gender + age_group + region, encodés en attribut composite
 INLP_composite (latent) + DPT_composite (sortie). C'est notre chaîne
 ULTIMATE.
 
-![Fig 2](results/figures/fig2_chain_tabicl_vs_graphsage.png)
+![Fig 2](fig2_chain_tabicl_vs_graphsage.png)
 
 *Fig 2. F1 et leakage le long de la chaîne. À gauche : TabICL garde
 F1=0.87 ; GraphSAGE chute à 0.59 (perte de 35 pp de F1). À droite : les

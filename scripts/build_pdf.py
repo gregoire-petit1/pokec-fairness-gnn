@@ -30,10 +30,10 @@ hr { display: none; }
 def main() -> None:
     text = SRC.read_text()
     pdf = MarkdownPdf(toc_level=0, optimize=True)
-    # root=REPO_ROOT lets fitz resolve relative image paths like
-    # ``results/figures/fig1...png`` (which is how the markdown source
-    # references them, so the file also renders correctly on GitHub).
-    pdf.add_section(Section(text, root=str(REPO_ROOT)), user_css=_USER_CSS)
+    # root=SRC.parent so relative image paths (``fig1_toolbox_per_metric.png``)
+    # resolve next to the markdown — the report/ directory is self-contained
+    # and renders correctly both via this script and on GitHub's md preview.
+    pdf.add_section(Section(text, root=str(SRC.parent)), user_css=_USER_CSS)
     pdf.meta["title"] = "Pokec-z — fairness multi-axes par composition post-hoc"
     pdf.meta["author"] = "Mini-projet IADATA708"
     pdf.save(str(OUT))
