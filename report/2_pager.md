@@ -1,217 +1,218 @@
-# Pokec-z — Fairness multi-axes par composition d'outils post-hoc
+# Pokec-z — Quel outil pour quelle métrique, sur quel axe ?
 
 **Mini-projet IADATA708.** Branche `feature/fairgnn-fix-and-multi-fairness`.
 
 ## 1. Setup
 
 **Données.** Pokec-z (subset officiel FairGNN, *Žilinský kraj*) : 66 569
-nœuds, ~729 k arêtes, 264 features tabulaires. **Pokec-n** est le subset
-sœur sur une autre région slovaque (Nitriansky kraj) — même collecte,
-même format, même cible, même schéma sensible — utilisé comme reproduction
-intra-dataset pour vérifier la stabilité, pas comme validation
-cross-dataset au sens strict.
-Cible : `completed_level_of_education_indicator` (binaire, 47.7 % positif).
-Attributs sensibles : `gender`, `region` (binaires), `age_group` (3 classes),
-plus les intersections `gender × age_group` et `gender × region` — soit
-**5 axes** simultanés.
+nœuds, ~729 k arêtes, 264 features tabulaires. **Pokec-n** = subset sœur
+sur une autre région slovaque (reproduction intra-dataset, pas
+cross-dataset au sens strict).
 
-**Splits.** Stratifié `y × gender` 60/20/20. Multi-seed `[3, 7, 21, 42, 99]`.
+**Cible.** `completed_level_of_education_indicator` (binaire, 47.7 %
+positif). **Attributs sensibles** : `gender`, `region` (binaires),
+`age_group` (3 classes), plus les intersections gender × age_group et
+gender × region — soit **5 axes** simultanés.
 
-**Méthodes** (toolbox de 5 familles) :
+**Splits.** Stratifié `y × gender` 60/20/20. Multi-seed
+`[3, 7, 21, 42, 99]`.
 
-- *Baselines* : GraphSAGE (2 SAGE, hidden=256, dropout=0.5), **TabICL**
-  (foundation tabulaire INRIA 2025, no graph, frozen).
+**Méthodes** :
+
+- *Baseline* : GraphSAGE (2 SAGE, hidden=256, dropout=0.5).
 - *Pre-process* : Resampling, FairDrop, Reweighting Kamiran-Calders 2012.
-- *In-training* : **FairGNN** (Dai & Wang 2021), méthode adversariale
-  qui décourage l'encoder d'apprendre des directions corrélées au sensible.
-  L'implémentation de départ du repo amont avait un défaut d'entraînement
-  adversarial ; on l'a remplacée par une variante avec **Gradient Reversal
-  Layer** pour stabiliser.
-- *Post-process* : EOT (Hardt 2016), DPT (Demographic Parity Threshold),
-  **INLP** (Ravfogel 2020) sur embeddings et features, et **les
-  compositions INLP+DPT et leur version multi-axes simultanée**.
+- *In-training* : **FairGNN** (Dai & Wang 2021), méthode adversariale,
+  entraînement two-optimizer alternating canonique.
+- *Post-process* : **EOT** (Hardt 2016, ΔEO), **DPT** (ΔDP), **INLP**
+  (Ravfogel 2020, leakage sur embeddings), composition mono-axe
+  **INLP+DPT**, et la chaîne composite multi-axes **INLP_composite +
+  DPT_composite** sur l'attribut joint à 12 cellules.
 
 **Métriques.** ΔDP, ΔEO, AUC gap (sortie), **Sensitive Leakage AUC**
 (probe LR train→test, Laclau et al. 2024). 50+ tests pytest, ruff propre,
 no-pandas/no-loops enforced.
 
-## 2. Finding 1 — Une toolbox, chaque outil sa métrique
+## 2. Finding 1 — La toolbox post-process bat FairGNN sur la fairness
 
-Notre résultat empirique principal sur cette première dimension est que
-**les méthodes de fairness ne sont pas substituables**. Chaque famille
-attaque une partie spécifique du problème, et il faut souvent en composer
-plusieurs pour traiter les trois métriques en même temps.
+Premier résultat : les méthodes de fairness ne sont pas substituables.
+Chaque famille de post-process attaque **une partie spécifique** du
+problème, et FairGNN ne fait ni l'une ni l'autre proprement.
 
-![Fig 1](fig1_toolbox_per_metric.png)
+| Méthode | ΔDP gender | Leakage gender |
+|---|---:|---:|
+| GraphSAGE baseline | 0.043 | 0.812 |
+| FairGNN (canonical, two-optimizer) | 0.030 | 0.828 |
+| **GraphSAGE+EOT@gender** | 0.019 | 0.812 |
+| **GraphSAGE+DPT@gender** | 0.019 | 0.812 |
+| **GraphSAGE+INLP@gender** | 0.043 | **0.573** |
+| **GraphSAGE+INLP+DPT@gender** | **0.003** | **0.573** |
 
-*Fig 1. Mêmes méthodes, 3 métriques. **DPT** (bleu) écrase ΔDP à 0.004
-mais ne touche pas le leakage. **INLP** (vert) tombe le leakage à 0.71
-mais ne change pas ΔDP. **FairGNN** (rouge) bouge un peu les deux au
-prix de F1. Seul l'**ULTIMATE** (orange = TabICL+INLP_composite+
-DPT_composite) règle les trois en même temps.*
+À F1 essentiellement équivalent (~0.94 dans tous les cas, dispersion
+multi-seed dans le bruit), les chaînes post-process atteignent :
 
-Pour un ingénieur qui voudrait une checklist, le mapping métrique → outil
-est le suivant :
+- **DPT/EOT** (seuil par groupe) → réduit ΔDP/ΔEO 2× à 4× vs FairGNN,
+  sans toucher aux embeddings (leakage inchangé).
+- **INLP** (projection sur embeddings) → réduit le leakage 0.81 → 0.57,
+  sans toucher aux seuils (ΔDP inchangé).
+- **INLP+DPT** : l'un opère sur les embeddings, l'autre sur les seuils,
+  les deux opérations sont orthogonales et se composent sans conflit.
+  Résultat : ΔDP=0.003 ET leakage=0.57 — **10× mieux** que FairGNN sur
+  ΔDP, **24 pp** de leakage en moins.
 
-| Si tu veux réduire... | Utilise | Pourquoi |
-|---|---|---|
-| **ΔDP** (taux de prédictions ≈ entre groupes) | **DPT** post-process | calibre un seuil par groupe, c'est l'objectif direct |
-| **ΔEO** (TPR ≈ entre groupes parmi y=1) | **EOT** post-process | même méca mais sur le sous-set y=1 |
-| **Leakage** (sensible récupérable depuis embeddings) | **INLP** | projette l'espace orthogonal aux directions du sensible |
-| **Tout en même temps** | **INLP_composite + DPT_composite** | les deux sont orthogonaux et se composent sans conflit |
+**Pourquoi FairGNN reste partiel.** L'encoder apprend à tromper un
+adversaire MLP spécifique sans supprimer le signal sous-jacent. Un autre
+probe (la LR de notre métrique de leakage) peut encore l'extraire.
+L'in-training adversariale donne une garantie *empirique* contre un
+adversaire spécifique ; INLP donne une garantie *formelle* contre toute
+attaque linéaire.
 
-Cette toolbox a une conséquence directe : **un foundation model + 30 lignes
-de post-process Pareto-domine FairGNN sur Pokec-z**. TabICL+EOT atteint
-F1=0.946 et ΔDP=0.007 contre FairGNN qui plafonne à F1=0.853 et ΔDP=0.009.
-On gagne 9 points de F1 *et* on est légèrement plus équitable, à un coût
-d'entraînement quasi-nul (TabICL est frozen, le calibrage des seuils prend
-moins d'une seconde). C'est un résultat qui invite à la prudence avant
-d'engager une méthode in-training adversariale sophistiquée.
+Le théorème de Chouldechova-Kleinberg (2017) confirme par ailleurs
+l'incompatibilité de ΔDP=0 et ΔEO=0 dès que les taux de base diffèrent :
+DPT@age_group baisse ΔDP de 0.075 à 0.044 mais double ΔEO. **Choisir une
+métrique, c'est choisir une éthique.**
 
-Le théorème de Chouldechova-Kleinberg (2017) dit par ailleurs que ΔDP=0 et
-ΔEO=0 sont mathématiquement incompatibles dès que les taux de base diffèrent
-entre groupes — ce qu'on vérifie expérimentalement : DPT@age_group baisse
-ΔDP de 0.075 à 0.044 mais double ΔEO (0.034 → 0.074). Choisir une métrique
-n'est pas un choix algorithmique, c'est un **choix normatif**.
+## 3. Finding 2 — Le bon axe à fairner = celui que le graphe amplifie
 
-## 3. Finding 2 — TabICL tient la composition multi-axes, GraphSAGE s'écrase
+Le second résultat est méthodologique et **inverse l'intuition initiale**.
+On a passé l'essentiel du projet à fairner `gender` (axe protégé reconnu).
+Mesurer le coefficient d'assortativité de Newman (2003) sur les 3 axes
+sensibles révèle qu'on s'est trompé d'axe :
 
-Le second résultat porte sur la **fairness sur plusieurs variables
-simultanément** (gender + age_group + region, encodés en attribut composite
-à 12 cellules). Pour traiter cinq axes à la fois, il faut composer
-INLP_composite (latent) + DPT_composite (sortie). C'est notre chaîne
-ULTIMATE.
+| Axe | r(s) | Interprétation |
+|---|---:|---|
+| gender | **−0.046** | graphe quasi-aléatoire vs gender → message passing n'amplifie rien |
+| age_group | **+0.352** | légère homophilie générationnelle |
+| region | **+0.901** | graphe massivement homophile en region |
 
-![Fig 2](fig2_chain_tabicl_vs_graphsage.png)
+`r(region) = 0.9` signifie que ~90 % des arêtes connectent deux personnes
+de la même région : Pokec-z est en pratique un graphe de régions,
+faiblement inter-connecté. Un GNN va amplifier cette structure dans ses
+embeddings — *c'est exactement le scénario où les méthodes
+fairness-on-graphs sont conçues pour intervenir*. Or notre setup typique
+applique FairGNN avec l'adversaire sur gender, là où le graphe ne fait
+quasiment rien.
 
-*Fig 2. F1 et leakage le long de la chaîne. À gauche : TabICL garde
-F1=0.87 ; GraphSAGE chute à 0.59 (perte de 35 pp de F1). À droite : les
-deux chaînes atteignent leakage = chance level (0.5).*
+**Test empirique** : FairGNN avec adversaire sur region (multi-seed
+Pokec-z) au lieu de gender :
 
-**Pourquoi GraphSAGE s'écrase et pas TabICL ?** Les coefficients
-d'assortativité de Newman (2003) racontent toute l'histoire : `r(gender) =
-−0.046` (le graphe n'est pas du tout homophile en gender), mais `r(region) =
-0.901` (le graphe est massivement homophile en region). Le message passing
-de GraphSAGE recombine les features d'un nœud avec celles de ses voisins ;
-quand ces voisins partagent presque toujours la même region, l'embedding
-final encode la region beaucoup plus intensément que la feature brute ne le
-laissait penser. Quand INLP_composite supprime ensuite les directions
-sensibles, il enlève une part majeure de l'information utile et la
-représentation s'effondre. TabICL, qui ne consomme jamais le graphe, n'a
-pas ce problème : ses embeddings ne sont pas dominés par la region, donc
-INLP ne casse rien d'essentiel.
+| Adversaire | F1 | ΔDP region | Leakage region |
+|---|---:|---:|---:|
+| FairGNN(adv=gender, λ=5) | 0.853 | 0.073 | 0.666 |
+| FairGNN(adv=region) | 0.937 | 0.033 | **0.761** ← *augmente* |
+| **GraphSAGE+DPT@region** | 0.939 | **0.025** | 0.641 |
+| **GraphSAGE+INLP+DPT@region** | 0.932 | **0.020** | **0.524** |
 
-**La règle pratique qui en sort** est utilisable avant tout entraînement :
-mesurer `r(s)` pour chaque attribut sensible. Si `r(s)` est faible, le
-graphe n'aide pas à prédire la cible *et* n'amplifie pas le biais marginal,
-auquel cas un foundation model tabulaire + post-process est presque
-toujours le bon choix. Si `r(s)` est élevé (le cas typique des datasets
-fairness-on-graphs publiés), les méthodes in-training graphiques redeviennent
-nécessaires parce que le post-process, qui n'opère que sur les sorties, ne
-peut pas atteindre l'espace latent biaisé. Sur Pokec-z, `r(gender) = -0.046`
-aurait dû nous orienter vers TabICL avant même de lancer GraphSAGE.
+Cibler le bon axe (region) avec FairGNN récupère le F1 et réduit
+modérément ΔDP, mais **augmente le leakage** : l'encoder trompe le MLP
+adversaire sans nettoyer la représentation. **Post-process simple bat
+FairGNN sur les 3 métriques même quand FairGNN cible le bon axe.**
 
-La validation multi-seed `[3, 7, 21, 42, 99]` confirme la stabilité : ΔDP
-gender ULTIMATE = 0.006 ± 0.005 ; leakage gender = 0.500 ± 0.010 ; F1 =
-0.87 à dispersion marginale sur TabICL. La reproduction sur Pokec-n
-(subset sœur même réseau, autre région) donne les mêmes chiffres à un
-écart inférieur à 0.01 — bonne stabilité intra-dataset, ce n'est pas
-une validation cross-dataset au sens strict.
+**Règle pratique** : avant tout entraînement GNN, mesurer `r(s)` pour
+chaque attribut sensible. Si `r(s)` est élevé, c'est cet axe que le graphe
+encode et donc celui qu'il faut fairner — **indépendamment de l'axe
+attendu normativement**. Si `r(s)` est faible sur tous les axes, le
+graphe n'est ni source ni amplificateur de biais : la fairness se règle
+sur les sorties, pas sur les embeddings.
 
-## 4. Compromis perf ↔ équité ↔ robustesse
+## 4. Finding 3 — ULTIMATE composite : 5 axes simultanés mais coût F1 prohibitif
 
-**Sur l'axe perf vs équité**, payer 8 points de F1 pour obtenir la
-fairness multi-axes complète sur TabICL est un compromis défendable. Sur
-GraphSAGE, perdre 35 points de F1 pour le même résultat de fairness rend
-la chaîne inutilisable en production — c'est exactement le genre de
-situation où le coût de la fairness fait basculer le choix d'architecture.
+Pour traiter gender, region, age_group et leurs intersections
+**simultanément**, on encode l'attribut composite *(gender × age_group ×
+region)* à 12 cellules et on applique INLP_composite + DPT_composite
+dessus.
 
-**Il n'y a pas de free-lunch intersectionnel.** Calibrer DPT uniquement sur
-gender atteint ΔDP gender = 0.004 mais laisse ΔDP gender×age_group à 0.10,
-voire le pousse plus haut sur FairGNN où on observe 0.154 sur l'axe croisé
-alors que le marginal gender est à 0.009 — c'est l'effet whack-a-mole que
-prédit l'argument intersectionnel de Crenshaw (1989). Si on veut traiter
-les axes croisés, il faut explicitement construire l'attribut composite
-et calibrer dessus, pas espérer que le débiaising mono-axe suffira.
+**Le pipeline ULTIMATE atteint le chance level (leakage ≈ 0.50) sur les
+5 axes simultanément**, y compris gender × age_group et gender × region.
+Aucune autre méthode de notre toolbox n'y arrive — INLP+DPT mono-axe
+laisse fuiter sur les axes croisés (gender×age 0.85, gender×region 0.73).
 
-**Sur la robustesse**, la chaîne post-hoc préserve la robustesse héritée du
-modèle de base parce qu'elle ne modifie pas l'encoder : GraphSAGE reste
+**Mais le coût F1 sur GraphSAGE est prohibitif.** GraphSAGE+ULTIMATE
+chute à F1=**0.59** (−35 pp vs baseline 0.94). Mécaniquement : les
+embeddings GraphSAGE sont saturés par l'homophilie region (cohérent avec
+`r(region) = 0.9`) ; INLP composite, en supprimant les directions
+encodant les 12 cellules, supprime aussi la majorité du signal utile
+pour prédire `y`. La représentation s'effondre.
+
+**Conséquence pratique** : ULTIMATE composite est *correct* au sens
+fairness (chance level partout) mais *inutilisable* en production sur un
+GNN homophile. Pour un cas réel multi-axes, il faut soit accepter un
+compromis sur le nombre d'axes traités simultanément (rester en mono-axe
+INLP+DPT), soit utiliser un encoder dont les embeddings ne sont pas
+saturés par l'attribut sensible dominant — au-delà du périmètre des
+méthodes fairness-on-graphs étudiées ici.
+
+Multi-seed `[3, 7, 21, 42, 99]` × Pokec-z/n confirme la stabilité du
+finding : ΔDP gender ULTIMATE = 0.006 ± 0.005, leakage ≈ 0.50 ± 0.01,
+F1 collapse stable. Reproduction Pokec-n à <0.01 près (intra-dataset).
+
+## 5. Compromis perf ↔ équité ↔ robustesse
+
+**Perf vs équité.** Le coût en F1 dépend du périmètre de fairness :
+- Mono-axe simple (DPT ou EOT seul) : <0.5 pp de F1, une métrique réglée.
+- Mono-axe combiné (INLP+DPT) : ~0.5 pp de F1, ΔDP **et** leakage réglés.
+- Multi-axes composite (ULTIMATE) : 35 pp de F1 sur GraphSAGE —
+  prohibitif. Le bénéfice (chance level sur 5 axes) ne compense pas la
+  perte d'utilité.
+
+**Pas de free-lunch intersectionnel.** DPT@gender seul atteint ΔDP gender
+= 0.019 mais laisse ΔDP gender×age_group à 0.085. C'est l'effet
+*whack-a-mole* prédit par l'argument intersectionnel de Crenshaw (1989).
+Pour traiter les axes croisés, il faut explicitement construire
+l'attribut composite et calibrer dessus, à charge de payer le coût
+associé.
+
+**Robustesse.** La chaîne post-hoc préserve la robustesse héritée du
+modèle de base parce qu'elle ne modifie pas l'encoder. GraphSAGE reste
 robuste à un bruit features σ ≤ 0.3 et à un edge drop ≤ 30 % (mesures
-issues du repo amont) avant comme après l'application d'INLP+DPT. C'est un
-avantage non-trivial des méthodes post-hoc sur l'in-training fairness, qui
-modifie l'encoder et peut dégrader sa robustesse de façon imprévue.
+issues du repo amont) avant comme après INLP+DPT. Avantage non-trivial
+sur l'in-training fairness, qui modifie l'encoder et peut dégrader sa
+robustesse de façon imprévue.
 
-## 5. Limites
+## 6. Limites
 
 **Limite philosophique.** Les métriques de fairness encodent toutes une
-position normative implicite : ΔDP=0 incarne l'anti-classification stricte
-(aucune corrélation avec le sensible n'est légitime), ΔEO=0 incarne une
-position méritocratique (les corrélations conditionnées à la vérité sont
-acceptables), la calibration par groupe assume que les écarts marginaux
-sont OK tant que la prédiction est correcte par groupe. Choisir une
-métrique, c'est choisir une éthique — et le théorème d'incompatibilité
-montre qu'on ne peut pas toutes les satisfaire à la fois. Notre toolbox
-fournit les outils, mais elle ne tranche pas le débat normatif.
+position normative implicite : ΔDP=0 incarne l'anti-classification
+stricte, ΔEO=0 incarne une méritocratie conditionnée à la vérité, la
+calibration par groupe assume que les écarts marginaux sont OK. Le
+théorème d'incompatibilité montre qu'on ne peut pas les satisfaire
+toutes à la fois. Notre toolbox fournit les outils, elle ne tranche pas
+le débat normatif.
 
 **Importation culturelle des catégories.** La fairness ML hérite des
-catégories du civil rights act US des années 60 (gender, race binaires)
-et notre dataset les reproduit en réduisant `gender` et `region` à 0/1
-sans documentation sémantique (Hoffmann 2019 ; Hanna et al. 2020).
-Concrètement, le subset FairGNN de Pokec-z code `spoken_languages` via
-8 indicateurs binaires — anglais, allemand, russe, français, espagnol,
-italien, slovaque, japonais — qui sont tous des langues internationales
-ou la langue majoritaire. Le hongrois (`madarsky`), le tchèque (`cesky`)
-et le romani sont absents, alors que le dataset SNAP original les encode
-en texte libre. La curation a probablement filtré ces langues parce
-qu'elles ont un taux d'occurrence faible dans Žilinský kraj (0.13 %
-d'hongrois, peu de gitans), mais le résultat est que le subset sur
-lequel toute la littérature fairness-on-graphs travaille est, par
-construction, aveugle aux axes ethniques.
+catégories US des années 60 (gender, race binaires) et notre dataset les
+reproduit en réduisant `gender` et `region` à 0/1 sans documentation
+sémantique (Hoffmann 2019 ; Hanna et al. 2020). Le subset FairGNN code
+`spoken_languages` via 8 indicateurs binaires tous internationaux ou
+langue majoritaire ; le hongrois, le tchèque et le romani sont absents
+alors que le SNAP original les encode en texte libre. Conséquence : la
+littérature fairness-on-graphs travaille sur un subset structurellement
+aveugle aux axes ethniques slovaques.
 
 **Limites techniques.** La garantie d'invariance d'INLP n'est valide que
 contre un classifieur linéaire ; un MLP probe non-linéaire pourrait
-recouvrir du signal résiduel. Côté FairGNN, le discriminateur adversarial
-est binaire dans la formulation standard de Dai & Wang : pour faire de la
-fairness sur `age_group` (3 classes) en in-training, il faudrait
-redimensionner la tête de discriminateur, ce qu'on n'a pas implémenté.
-Côté TabICL, ULTIMATE applique INLP sur `x` brut alors que les embeddings
-sont accessibles via `TabICLCache.row_repr`. On a testé la chaîne
-complète **ULTIMATE-LATENT** (INLP composite + DPT composite ré-injectés
-dans `icl_predictor`) en multi-seed × Pokec-z/n pour valider que `x` brut
-est le bon choix. Verdict : sur Pokec-z, F1 retention légèrement meilleure
-(+1.8 pp à 0.884 vs 0.866), mais sur Pokec-n **3 seeds sur 5 collapsent**
-(F1 = 0.41 / 0.49 / 0.60 contre 0.94 baseline) — la moyenne 0.66 masque
-cette brittleness. La projection composite dans l'espace embedding 512-dim
-supprime trop de directions utiles sur Pokec-n. **ULTIMATE-LATENT n'est
-donc pas Pareto-dominant** et la chaîne sur `x` brut reste le bon choix
-pour la robustesse cross-dataset (chiffres détaillés en annexe).
+recouvrir du signal résiduel. Le discriminateur FairGNN est binaire dans
+la formulation standard de Dai & Wang ; pour fairner `age_group`
+(3 classes) en in-training il faudrait redimensionner la tête de
+discriminateur, non implémenté.
 
 **Limite de généralisation.** Pokec-z et Pokec-n sont deux subsets du
-même réseau slovaque sur des régions différentes — c'est de la
-reproduction *intra-dataset*, pas du cross-dataset. Pour valider hors de
-Pokec, il faudrait Bail / Credit / German Credit re-graphifiés. La cible
+même réseau Pokec sur des régions slovaques différentes — c'est de la
+reproduction intra-dataset, pas du cross-dataset au sens strict (pour ça
+il faudrait Bail / Credit re-graphifiés). La cible
 `completed_level_of_education_indicator` est faiblement homophile en
-gender (`r ≈ -0.046`) ; nos conclusions sur "TabICL bat GraphSAGE" et
-"post-process suffit" sont conditionnelles à cette propriété — sur un
-graphe fortement homophile à l'attribut sensible, le classement
-s'inverserait probablement.
+gender ; nos conclusions sur "post-process bat in-training" sont
+conditionnelles à cette propriété — sur un graphe fortement homophile à
+l'attribut sensible attendu, le classement pourrait s'inverser.
 
-**Pour conclure.** Si on prend du recul sur l'ensemble du projet, le
-choix d'axe sensible est probablement la limite la plus structurante.
-Dans un contexte d'Europe centrale, et particulièrement en Slovaquie,
-l'axe ethnique — minorité hongroise et surtout minorité gitane — est
-beaucoup plus prévalent comme source de discrimination effective que
-l'axe du sexe sur lequel on a passé la majeure partie de l'étude.
-Logement, accès à l'éducation, embauche : c'est sur ces axes-là que les
-disparités mesurables sont les plus fortes en Slovaquie. Pouvoir mesurer
-la fairness sur cet axe-là aurait rendu l'analyse beaucoup plus utile
-socialement, mais le dataset ne le permet pas. Notre travail montre donc
-ce qu'on peut techniquement faire avec les outils disponibles, mais le
-verrou principal n'est plus algorithmique — il est en amont, au niveau
-de la collecte et de la curation des données. Tant qu'un dataset
-fairness-on-graphs slovaque sans label ethnique reste le standard de
-la littérature, l'évaluation des méthodes restera détachée des axes de
-discrimination qui comptent vraiment dans le pays d'origine de la donnée.
+**Pour conclure.** Le choix d'axe sensible est probablement la limite la
+plus structurante. Dans le contexte slovaque, l'axe ethnique — minorité
+hongroise et surtout minorité gitane — est beaucoup plus prévalent comme
+source de discrimination effective (logement, éducation, embauche) que
+l'axe du sexe sur lequel on a passé l'essentiel de l'étude. Le verrou
+principal n'est pas algorithmique mais en amont, au niveau de la curation
+des données. Tant qu'un dataset slovaque sans label ethnique reste le
+standard, l'évaluation des méthodes restera détachée des axes qui
+comptent vraiment dans le pays d'origine de la donnée.
 
 <!-- PAGEBREAK -->
 
@@ -219,61 +220,66 @@ discrimination qui comptent vraiment dans le pays d'origine de la donnée.
 
 ### A.1 Outils d'IA
 
-Assistance algorithmique pour la réimplémentation FairGNN-GRL, la
-migration pandas → polars, l'intégration TabICL, l'ajout des modules
-INLP / calibration / reweighting, et la rédaction. Code revu, testé,
-exécuté par les auteurs.
+Assistance algorithmique pour la migration pandas → polars, l'intégration
+des modules INLP / calibration / reweighting, le portage de FairGNN
+canonical (two-optimizer alternating depuis le repo Dai-Wang 2021), et la
+rédaction. Code revu, testé, exécuté par les auteurs.
 
 ### A.2 Références
 
-Hardt-Price-Srebro 2016 ; Ravfogel et al. 2020 ; Ganin & Lempitsky 2015 ;
-Dai & Wang 2021 ; Kamiran & Calders 2012 ; Chouldechova 2017 ; Crenshaw
-1989 ; Hoffmann 2019 ; Hanna et al. 2020 (FAccT) ; Newman 2003 ; Qu et
-al. 2025 (TabICL) ; Laclau et al. 2024.
+Dai, E. & Wang, S. (2021). *Say No to the Discrimination — Learning Fair
+Graph Neural Networks with Limited Sensitive Attribute Information*.
+WSDM. — Hardt, M., Price, E. & Srebro, N. (2016). *Equality of
+Opportunity in Supervised Learning*. NeurIPS. — Ravfogel, S. et al.
+(2020). *Null It Out — Guarding Protected Attributes by Iterative
+Nullspace Projection*. ACL. — Ganin, Y. & Lempitsky, V. (2015).
+*Unsupervised Domain Adaptation by Backpropagation* (origine du
+Gradient Reversal Layer). — Kamiran, F. & Calders, T. (2012). *Data
+Preprocessing Techniques for Classification without Discrimination*.
+KAIS. — Chouldechova, A. (2017) ; Kleinberg, J. et al. (2017). Théorèmes
+d'incompatibilité ΔDP / ΔEO. — Crenshaw, K. (1989). *Demarginalizing the
+Intersection of Race and Sex*. — Hoffmann, A. L. (2019). *Where
+Fairness Fails*. — Hanna, A. et al. (2020). *Towards a Critical Race
+Methodology in Algorithmic Fairness*. FAccT. — Newman, M. E. J. (2003).
+*Mixing Patterns in Networks*. — Laclau, C., Largeron, C. & Choudhary,
+M. (2024). *A Survey on Fairness for Machine Learning on Graphs*.
 
-### A.3 Comparaison méthodes × axes (Pokec-z, seed=42)
+### A.3 Comparaison méthodes × axe gender (Pokec-z, seed=42)
 
-Source : `results/metrics/comparison_full.csv`. Acc et F1 sont identiques
-par modèle (même prédicteur sur tous les axes) ; ΔDP/ΔEO/Leakage varient
-par axe.
+Source : `results/metrics/comparison_full.csv`.
 
-| Modèle | Attribut | Acc | F1 | ΔDP | ΔEO | Leakage |
-|---|---|---:|---:|---:|---:|---:|
-| GraphSAGE | gender | 0.9383 | 0.9381 | 0.0429 | 0.0231 | 0.8120 |
-| GraphSAGE | region | 0.9383 | 0.9381 | 0.0532 | 0.0042 | 0.6411 |
-| GraphSAGE | age_group | 0.9383 | 0.9381 | 0.0560 | 0.0380 | 0.8908 |
-| GraphSAGE | gender × age | 0.9383 | 0.9381 | 0.0872 | 0.0642 | 0.8538 |
-| GraphSAGE | gender × region | 0.9383 | 0.9381 | 0.0929 | 0.0311 | 0.7273 |
-| GraphSAGE+Resampling | gender | 0.9383 | 0.9381 | 0.0423 | 0.0229 | 0.8109 |
-| GraphSAGE+FairDrop | gender | 0.9386 | 0.9384 | 0.0442 | 0.0253 | 0.8250 |
-| FairGNN (λ=5.0) | gender | 0.8533 | 0.8532 | **0.0090** | 0.0114 | 0.8618 |
-| FairGNN (λ=5.0) | gender × age | 0.8533 | 0.8532 | 0.1535 | 0.0435 | 0.8328 |
-| TabICL | gender | **0.9486** | **0.9484** | 0.0408 | 0.0247 | 0.8819 |
-| TabICL | region | 0.9486 | 0.9484 | 0.0493 | 0.0014 | 0.6208 |
-| TabICL | age_group | 0.9486 | 0.9484 | 0.0591 | 0.0254 | 0.9919 |
-| TabICL | gender × age | 0.9486 | 0.9484 | 0.0916 | 0.0524 | 0.9392 |
-| GraphSAGE+EOT@gender | gender | 0.9393 | 0.9392 | **0.0191** | **0.0001** | 0.8120 |
-| **TabICL+EOT@gender** | **gender** | **0.9461** | **0.9459** | **0.0071** | 0.0090 | 0.8819 |
-| GraphSAGE+INLP@gender | gender | 0.9317 | 0.9316 | 0.0428 | 0.0243 | **0.5726** |
-| TabICL+INLP@gender | gender | 0.9461 | 0.9459 | 0.0371 | 0.0249 | 0.7115 |
-| GraphSAGE+INLP+DPT@gender | gender | 0.9320 | 0.9319 | **0.0032** | 0.0078 | **0.5726** |
-| TabICL+INLP+DPT@gender | gender | 0.9429 | 0.9427 | **0.0009** | 0.0188 | 0.7115 |
-| **GraphSAGE+ULTIMATE** (composite) | gender | **0.6155** | **0.5915** | **0.0090** | **0.0248** | **0.4996** |
-| **TabICL+ULTIMATE** (composite) | gender | **0.8659** | **0.8657** | **0.0134** | **0.0008** | **0.5059** |
-| TabICL+ULTIMATE-LATENT † | gender | 0.8898 | 0.8888 | 0.0057 | 0.0094 | 0.5545 |
+| Modèle | Acc | F1 | ΔDP | ΔEO | Leakage |
+|---|---:|---:|---:|---:|---:|
+| GraphSAGE | 0.9383 | 0.9381 | 0.0429 | 0.0231 | 0.8120 |
+| GraphSAGE+Resampling | 0.9383 | 0.9381 | 0.0423 | 0.0229 | 0.8109 |
+| GraphSAGE+FairDrop | 0.9386 | 0.9384 | 0.0442 | 0.0253 | 0.8250 |
+| FairGNN canonical (two-opt, multi-seed μ) | 0.937 | 0.937 | 0.030 | 0.014 | 0.828 |
+| **GraphSAGE+EOT@gender** | 0.9393 | 0.9392 | **0.0191** | **0.0001** | 0.8120 |
+| **GraphSAGE+DPT@gender** | 0.9393 | 0.9392 | **0.0191** | 0.0220 | 0.8120 |
+| **GraphSAGE+INLP@gender** | 0.9317 | 0.9316 | 0.0428 | 0.0243 | **0.5726** |
+| **GraphSAGE+INLP+DPT@gender** | 0.9320 | 0.9319 | **0.0032** | 0.0078 | **0.5726** |
+| GraphSAGE+ULTIMATE composite | 0.6155 | 0.5915 | 0.0090 | 0.0248 | **0.4996** |
 
-*† ULTIMATE-LATENT : ligne reportée pour seed=42 Pokec-z. Multi-seed
-[3, 7, 21, 42, 99] sur Pokec-z donne F1 = 0.884 ± 0.025 (stable) ;
-sur Pokec-n F1 = 0.657 ± 0.214 (brittle, 3 seeds sur 5 collapsent à
-F1 = 0.41 / 0.49 / 0.60). Le pipeline ULTIMATE-x-brut reste préféré
-pour la robustesse cross-dataset.*
+### A.4 Comparaison méthodes × axe region (Pokec-z, seed=42)
 
-### A.4 ULTIMATE composite — un seul fit règle TOUT (Pokec-z, seed=42)
+Source : `results/metrics/comparison_full.csv` et
+`results/metrics/fairgnn_on_region.csv`.
 
-Source : `results/metrics/comparison_full.csv`. Une seule chaîne
-`INLP_composite + DPT_composite` à 12 cellules calibrée sur l'attribut
-joint *(gender × age_group × region)* ramène le leakage **simultanément**
-au chance level (~0.50) sur les 5 axes — incluant les intersections.
+| Modèle | Acc | F1 | ΔDP region | ΔEO region | Leakage region |
+|---|---:|---:|---:|---:|---:|
+| GraphSAGE | 0.9383 | 0.9381 | 0.0532 | 0.0042 | 0.6411 |
+| FairGNN canonical (adv=gender, two-opt μ) | 0.937 | 0.937 | 0.043 | 0.018 | 0.821 |
+| FairGNN canonical (adv=region, two-opt μ) | 0.938 | 0.938 | 0.033 | 0.006 | **0.764** ← *augmente* |
+| **GraphSAGE+DPT@region** | 0.9392 | 0.9390 | **0.0246** | 0.0222 | 0.6411 |
+| **GraphSAGE+INLP@region** | 0.9336 | 0.9335 | 0.0487 | 0.0035 | **0.5237** |
+| **GraphSAGE+INLP+DPT@region** | 0.9323 | 0.9322 | **0.0200** | 0.0219 | **0.5237** |
+| GraphSAGE+ULTIMATE composite | 0.6155 | 0.5915 | 0.0122 | 0.0343 | **0.4959** |
+
+### A.5 ULTIMATE composite — un seul fit règle 5 axes (Pokec-z, seed=42)
+
+Une seule chaîne `INLP_composite + DPT_composite` calibrée sur l'attribut
+joint à 12 cellules ramène le leakage **simultanément** au chance level
+(~0.50) sur les 5 axes — y compris les intersections.
 
 | Modèle | Attribut | ΔDP | ΔEO | AUC-gap | Leakage |
 |---|---|---:|---:|---:|---:|
@@ -282,8 +288,7 @@ au chance level (~0.50) sur les 5 axes — incluant les intersections.
 |  | age_group | 0.0304 | 0.0161 | 0.0324 | 0.5049 |
 |  | gender × age | 0.0534 | 0.0371 | 0.0532 | 0.4983 |
 |  | gender × region | 0.0405 | 0.0687 | 0.0388 | 0.4983 |
-| TabICL+ULTIMATE (Acc=0.866, F1=0.866) | gender | 0.0134 | 0.0008 | 0.0018 | 0.5059 |
-|  | region | 0.0174 | 0.0434 | 0.0143 | 0.4950 |
-|  | age_group | 0.0196 | 0.0437 | 0.0294 | 0.4790 |
-|  | gender × age | 0.0494 | 0.0638 | 0.0448 | 0.4995 |
-|  | gender × region | 0.0366 | 0.0711 | 0.0196 | 0.4951 |
+
+Coût : F1 = 0.59 sur GraphSAGE (−35 pp vs baseline). Le gain de fairness
+intersectionnelle ne compense pas la perte d'utilité — la chaîne reste un
+outil d'analyse, pas de production.
