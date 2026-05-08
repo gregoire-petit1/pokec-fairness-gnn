@@ -248,7 +248,9 @@ par axe.
 | TabICL+INLP@gender | gender | 0.9461 | 0.9459 | 0.0371 | 0.0249 | 0.7115 |
 | GraphSAGE+INLP+DPT@gender | gender | 0.9320 | 0.9319 | **0.0032** | 0.0078 | **0.5726** |
 | TabICL+INLP+DPT@gender | gender | 0.9429 | 0.9427 | **0.0009** | 0.0188 | 0.7115 |
-| **TabICL+ULTIMATE-LATENT** (Pokec-z, μ 5 seeds : F1 ± σ = 0.884 ± 0.025 ; Pokec-n : 0.657 ± 0.214 brittle) | gender | 0.8898 | 0.8888 | 0.0057 | 0.0094 | 0.5545 |
+| **GraphSAGE+ULTIMATE** (composite) | gender | **0.6155** | **0.5915** | **0.0090** | **0.0248** | **0.4996** |
+| **TabICL+ULTIMATE** (composite) | gender | **0.8659** | **0.8657** | **0.0134** | **0.0008** | **0.5059** |
+| TabICL+ULTIMATE-LATENT (Pokec-z, μ 5 seeds : F1 ± σ = 0.884 ± 0.025 ; Pokec-n : 0.657 ± 0.214 brittle) | gender | 0.8898 | 0.8888 | 0.0057 | 0.0094 | 0.5545 |
 
 ### A.4 ULTIMATE composite — un seul fit règle TOUT (Pokec-z, seed=42)
 
