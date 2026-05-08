@@ -167,11 +167,12 @@ recouvrir du signal résiduel. Côté FairGNN, le discriminateur adversarial
 est binaire dans la formulation standard de Dai & Wang : pour faire de la
 fairness sur `age_group` (3 classes) en in-training, il faudrait
 redimensionner la tête de discriminateur, ce qu'on n'a pas implémenté.
-Côté TabICL, notre pipeline applique INLP sur les features brutes par
-simplicité, mais les embeddings de ligne sont accessibles via
-`TabICLCache.row_repr` ; ré-implémenter INLP dessus rendrait la chaîne
-strictement post-process comme côté GraphSAGE — raffinement d'ingénierie
-non mené.
+Côté TabICL, ULTIMATE applique INLP sur `x` brut par simplicité ; or les
+embeddings sont accessibles via `TabICLCache.row_repr`. Validation
+multi-seed × Pokec-z/n : INLP sur embeddings tombe le leakage gender à
+**0.61-0.63** vs 0.71 sur `x` brut, avec reproduction cross-dataset à
+<0.02 près (`results/metrics/tabicl_inlp_embedding.csv`). Ré-injection
+dans le prédicteur pour valider F1 retention : prochaine étape.
 
 **Limite de généralisation.** Pokec-z et Pokec-n sont deux subsets du
 même réseau slovaque, et la cible `completed_level_of_education_indicator`
