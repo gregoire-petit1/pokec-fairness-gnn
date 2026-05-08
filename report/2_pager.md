@@ -105,12 +105,21 @@ modérément ΔDP, mais **augmente le leakage** : l'encoder trompe le MLP
 adversaire sans nettoyer la représentation. **Post-process simple bat
 FairGNN sur les 3 métriques même quand FairGNN cible le bon axe.**
 
-**Règle pratique** : avant tout entraînement GNN, mesurer `r(s)` pour
-chaque attribut sensible. Si `r(s)` est élevé, c'est cet axe que le graphe
-encode et donc celui qu'il faut débiaiser — **indépendamment de l'axe
-attendu normativement**. Si `r(s)` est faible sur tous les axes, le
-graphe n'est ni source ni amplificateur de biais : la fairness se règle
-sur les sorties, pas sur les embeddings.
+**Règle pratique** : mesurer `r(s)` avant tout entraînement GNN te dit
+*où le graphe encode le sensible*. Conséquence opérationnelle :
+
+- Sur les axes où `r(s) ≈ 0` (le graphe ignore l'attribut), un
+  post-process sur les sorties (DPT/EOT) suffit — l'embedding ne porte
+  pas le signal sensible spécifiquement, tout se règle au niveau des
+  prédictions.
+- Sur les axes où `r(s)` est élevé (le graphe amplifie l'attribut), il
+  faut aussi nettoyer les embeddings (INLP) en plus des seuils. Sinon
+  le sensible reste latent dans la représentation et fuite dans tout
+  downstream.
+
+Sur Pokec-z, ça veut dire : DPT@gender suffit pour gender (`r ≈ 0`),
+mais region (`r = 0.9`) nécessite la chaîne INLP+DPT pour vraiment être
+traité.
 
 ## 4. Finding 3 — ULTIMATE composite : 5 axes simultanés mais coût F1 prohibitif
 
