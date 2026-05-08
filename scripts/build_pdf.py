@@ -27,13 +27,24 @@ hr { display: none; }
 """
 
 
+_PAGEBREAK_MARKER = "<!-- PAGEBREAK -->"
+
+
 def main() -> None:
     text = SRC.read_text()
+    # markdown-pdf creates a hard page break between Sections, so we split
+    # on a custom marker (rendered as a comment by GitHub's md preview, so
+    # the markdown stays readable on the GH side too).
+    chunks = [c.strip() for c in text.split(_PAGEBREAK_MARKER)]
+
     pdf = MarkdownPdf(toc_level=0, optimize=True)
-    # root=SRC.parent so relative image paths (``fig1_toolbox_per_metric.png``)
-    # resolve next to the markdown — the report/ directory is self-contained
-    # and renders correctly both via this script and on GitHub's md preview.
-    pdf.add_section(Section(text, root=str(SRC.parent)), user_css=_USER_CSS)
+    for chunk in chunks:
+        if not chunk:
+            continue
+        # root=SRC.parent so relative image paths (``fig1_toolbox_per_metric.png``)
+        # resolve next to the markdown — the report/ directory is self-contained
+        # and renders correctly both via this script and on GitHub's md preview.
+        pdf.add_section(Section(chunk, root=str(SRC.parent)), user_css=_USER_CSS)
     pdf.meta["title"] = "Pokec-z — fairness multi-axes par composition post-hoc"
     pdf.meta["author"] = "Mini-projet IADATA708"
     pdf.save(str(OUT))

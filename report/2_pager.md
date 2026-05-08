@@ -203,9 +203,9 @@ fairness-on-graphs slovaque sans label ethnique reste le standard de
 la littérature, l'évaluation des méthodes restera détachée des axes de
 discrimination qui comptent vraiment dans le pays d'origine de la donnée.
 
----
+<!-- PAGEBREAK -->
 
-## Annexe
+## Annexes
 
 ### A.1 Outils d'IA
 
