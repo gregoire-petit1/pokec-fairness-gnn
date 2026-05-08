@@ -203,10 +203,10 @@ fairness-on-graphs slovaque sans label ethnique reste le standard de
 la littérature, l'évaluation des méthodes restera détachée des axes de
 discrimination qui comptent vraiment dans le pays d'origine de la donnée.
 
-**Outils d'IA** (mention exigée) : assistance algorithmique pour la
-réimplémentation FairGNN-GRL, la migration pandas → polars, l'intégration
-TabICL, l'ajout des modules INLP / calibration / reweighting, et la
-rédaction. Code revu, testé, exécuté par les auteurs.
+**Outils d'IA** : assistance algorithmique pour la réimplémentation
+FairGNN-GRL, la migration pandas → polars, l'intégration TabICL, l'ajout
+des modules INLP / calibration / reweighting, et la rédaction. Code revu,
+testé, exécuté par les auteurs.
 
 **Références.** Hardt-Price-Srebro 2016 ; Ravfogel et al. 2020 ; Ganin &
 Lempitsky 2015 ; Dai & Wang 2021 ; Kamiran & Calders 2012 ; Chouldechova
@@ -219,9 +219,9 @@ Newman 2003 ; Qu et al. 2025 (TabICL) ; Laclau et al. 2024.
 
 ### A.1 Comparaison méthodes × axes (Pokec-z, seed=42)
 
-Source : `results/metrics/comparison_full.csv`. Lecture : la colonne
-**Acc** et **F1** sont identiques par modèle (même prédicteur sur tous
-les axes, c'est l'éval qui change). ΔDP/ΔEO/Leakage varient par axe.
+Source : `results/metrics/comparison_full.csv`. Acc et F1 sont identiques
+par modèle (même prédicteur sur tous les axes) ; ΔDP/ΔEO/Leakage varient
+par axe.
 
 | Modèle | Attribut | Acc | F1 | ΔDP | ΔEO | Leakage |
 |---|---|---:|---:|---:|---:|---:|
@@ -244,35 +244,24 @@ les axes, c'est l'éval qui change). ΔDP/ΔEO/Leakage varient par axe.
 | TabICL+INLP@gender | gender | 0.9461 | 0.9459 | 0.0371 | 0.0249 | 0.7115 |
 | GraphSAGE+INLP+DPT@gender | gender | 0.9320 | 0.9319 | **0.0032** | 0.0078 | **0.5726** |
 | TabICL+INLP+DPT@gender | gender | 0.9429 | 0.9427 | **0.0009** | 0.0188 | 0.7115 |
-| **GraphSAGE+ULTIMATE** (composite) | gender | 0.6155 | 0.5915 | 0.0090 | 0.0248 | **0.4996** |
-| **TabICL+ULTIMATE** (composite) | gender | **0.8659** | **0.8657** | 0.0134 | 0.0008 | **0.5059** |
+| **TabICL+ULTIMATE-LATENT** (Pokec-z, μ 5 seeds : F1 ± σ = 0.884 ± 0.025 ; Pokec-n : 0.657 ± 0.214 brittle) | gender | 0.8898 | 0.8888 | 0.0057 | 0.0094 | 0.5545 |
 
-### A.2 ULTIMATE-LATENT vs ULTIMATE-x-brut — multi-seed [3, 7, 21, 42, 99]
+### A.2 ULTIMATE composite — un seul fit règle TOUT (Pokec-z, seed=42)
 
-Source : `results/metrics/tabicl_inlp_reinjection_composite.csv`.
-ULTIMATE-LATENT projette dans `row_repr` (512 dim) et ré-injecte dans
-`icl_predictor` ; ULTIMATE-x-brut applique INLP sur `x` (264 dim) et
-utilise une LR séparée. **F1 par seed** :
+Source : `results/metrics/comparison_full.csv`. Une seule chaîne
+`INLP_composite + DPT_composite` à 12 cellules calibrée sur l'attribut
+joint *(gender × age_group × region)* ramène le leakage **simultanément**
+au chance level (~0.50) sur les 5 axes — incluant les intersections.
 
-| dataset | seed | F1 baseline | F1 ULTIMATE-LATENT |
-|---|---|---:|---:|
-| pokec-z | 3 | 0.948 | 0.895 |
-| pokec-z | 7 | 0.945 | 0.884 |
-| pokec-z | 21 | 0.950 | 0.910 |
-| pokec-z | 42 | 0.946 | 0.889 |
-| pokec-z | 99 | 0.948 | 0.840 |
-| pokec-n | 3 | 0.947 | **0.598** ← collapse |
-| pokec-n | 7 | 0.946 | 0.914 |
-| pokec-n | 21 | 0.948 | 0.870 |
-| pokec-n | 42 | 0.945 | **0.411** ← collapse |
-| pokec-n | 99 | 0.947 | **0.493** ← collapse |
-
-| dataset | F1 ULTIMATE-x-brut | F1 ULTIMATE-LATENT (μ ± σ) |
-|---|---:|---:|
-| pokec-z | 0.866 | 0.884 ± 0.025 |
-| pokec-n | 0.866 | **0.657 ± 0.214** ← brittle |
-
-ULTIMATE-LATENT gagne 1.8 pp de F1 sur Pokec-z mais s'effondre sur 3 des
-5 seeds Pokec-n (F1 entre 0.41 et 0.60). La cross-dataset reproduction
-ne tient pas. Le pipeline de référence (ULTIMATE-x-brut) reste le bon
-choix.
+| Modèle | Attribut | ΔDP | ΔEO | AUC-gap | Leakage |
+|---|---|---:|---:|---:|---:|
+| GraphSAGE+ULTIMATE (Acc=0.616, F1=0.592) | gender | 0.0090 | 0.0248 | 0.0085 | 0.4996 |
+|  | region | 0.0122 | 0.0343 | 0.0103 | 0.4959 |
+|  | age_group | 0.0304 | 0.0161 | 0.0324 | 0.5049 |
+|  | gender × age | 0.0534 | 0.0371 | 0.0532 | 0.4983 |
+|  | gender × region | 0.0405 | 0.0687 | 0.0388 | 0.4983 |
+| TabICL+ULTIMATE (Acc=0.866, F1=0.866) | gender | 0.0134 | 0.0008 | 0.0018 | 0.5059 |
+|  | region | 0.0174 | 0.0434 | 0.0143 | 0.4950 |
+|  | age_group | 0.0196 | 0.0437 | 0.0294 | 0.4790 |
+|  | gender × age | 0.0494 | 0.0638 | 0.0448 | 0.4995 |
+|  | gender × region | 0.0366 | 0.0711 | 0.0196 | 0.4951 |
