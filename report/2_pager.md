@@ -71,10 +71,10 @@ l'incompatibilité de ΔDP=0 et ΔEO=0 dès que les taux de base diffèrent :
 DPT@age_group baisse ΔDP de 0.075 à 0.044 mais double ΔEO. **Choisir une
 métrique, c'est choisir une éthique.**
 
-## 3. Finding 2 — Le bon axe à fairner = celui que le graphe amplifie
+## 3. Finding 2 — Le bon axe à débiaiser = celui que le graphe amplifie
 
 Le second résultat est méthodologique et **inverse l'intuition initiale**.
-On a passé l'essentiel du projet à fairner `gender` (axe protégé reconnu).
+On a passé l'essentiel du projet à débiaiser `gender` (axe protégé reconnu).
 Mesurer le coefficient d'assortativité de Newman (2003) sur les 3 axes
 sensibles révèle qu'on s'est trompé d'axe :
 
@@ -109,7 +109,7 @@ FairGNN sur les 3 métriques même quand FairGNN cible le bon axe.**
 
 **Règle pratique** : avant tout entraînement GNN, mesurer `r(s)` pour
 chaque attribut sensible. Si `r(s)` est élevé, c'est cet axe que le graphe
-encode et donc celui qu'il faut fairner — **indépendamment de l'axe
+encode et donc celui qu'il faut débiaiser — **indépendamment de l'axe
 attendu normativement**. Si `r(s)` est faible sur tous les axes, le
 graphe n'est ni source ni amplificateur de biais : la fairness se règle
 sur les sorties, pas sur les embeddings.
@@ -191,7 +191,7 @@ aveugle aux axes ethniques slovaques.
 **Limites techniques.** La garantie d'invariance d'INLP n'est valide que
 contre un classifieur linéaire ; un MLP probe non-linéaire pourrait
 recouvrir du signal résiduel. Le discriminateur FairGNN est binaire dans
-la formulation standard de Dai & Wang ; pour fairner `age_group`
+la formulation standard de Dai & Wang ; pour débiaiser `age_group`
 (3 classes) en in-training il faudrait redimensionner la tête de
 discriminateur, non implémenté.
 

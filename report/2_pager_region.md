@@ -1,4 +1,4 @@
-# Pokec-z — Quel axe sensible faut-il fairner ?
+# Pokec-z — Quel axe sensible faut-il débiaiser ?
 
 **Mini-projet IADATA708.** Branche `feature/fairgnn-fix-and-multi-fairness`.
 
@@ -56,10 +56,10 @@ Le théorème de Chouldechova-Kleinberg (2017) confirme l'incompatibilité de
 ΔDP de 0.075 à 0.044 mais double ΔEO. Choisir une métrique = choisir une
 éthique.
 
-## 3. Finding 2 — Quel axe fairner ? Celui que le graphe amplifie, pas celui qu'on attend
+## 3. Finding 2 — Quel axe débiaiser ? Celui que le graphe amplifie, pas celui qu'on attend
 
 Le second résultat est méthodologique et il **inverse l'intuition initiale**.
-On a passé l'essentiel du projet à fairner `gender` (axe protégé reconnu).
+On a passé l'essentiel du projet à débiaiser `gender` (axe protégé reconnu).
 Mesurer le coefficient d'assortativité de Newman (2003) sur les 3 axes
 sensibles révèle qu'on s'est trompé d'axe :
 
@@ -103,7 +103,7 @@ d'engager un FairGNN à 200 epochs quand un post-process à 30 lignes fait
 mieux.
 
 **La règle pratique qui en sort** : **mesurer `r(s)` avant tout entraînement
-GNN**. Si `r(s)` est élevé sur un axe, c'est *cet* axe qu'il faut fairner —
+GNN**. Si `r(s)` est élevé sur un axe, c'est *cet* axe qu'il faut débiaiser —
 indépendamment de quel axe on attendait normativement. Si `r(s)` est faible
 sur tous les axes pertinents, le graphe ne contribue ni au signal ni au
 biais, et un foundation tabulaire + post-process est presque toujours le
@@ -172,7 +172,7 @@ un subset structurellement aveugle aux axes ethniques.
 **Limites techniques.** La garantie d'invariance d'INLP n'est valide que
 contre un classifieur linéaire ; un MLP probe non-linéaire pourrait
 recouvrir du signal résiduel. Le discriminateur FairGNN est binaire dans
-la formulation standard de Dai & Wang ; pour fairner `age_group` (3 classes)
+la formulation standard de Dai & Wang ; pour débiaiser `age_group` (3 classes)
 en in-training il faudrait redimensionner la tête de discriminateur,
 non implémenté. Une variante exploratoire **ULTIMATE-LATENT** (INLP appliqué
 dans `TabICLCache.row_repr` puis ré-injecté dans `icl_predictor`) gagne
