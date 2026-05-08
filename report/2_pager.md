@@ -250,7 +250,13 @@ par axe.
 | TabICL+INLP+DPT@gender | gender | 0.9429 | 0.9427 | **0.0009** | 0.0188 | 0.7115 |
 | **GraphSAGE+ULTIMATE** (composite) | gender | **0.6155** | **0.5915** | **0.0090** | **0.0248** | **0.4996** |
 | **TabICL+ULTIMATE** (composite) | gender | **0.8659** | **0.8657** | **0.0134** | **0.0008** | **0.5059** |
-| TabICL+ULTIMATE-LATENT (Pokec-z, μ 5 seeds : F1 ± σ = 0.884 ± 0.025 ; Pokec-n : 0.657 ± 0.214 brittle) | gender | 0.8898 | 0.8888 | 0.0057 | 0.0094 | 0.5545 |
+| TabICL+ULTIMATE-LATENT † | gender | 0.8898 | 0.8888 | 0.0057 | 0.0094 | 0.5545 |
+
+*† ULTIMATE-LATENT : ligne reportée pour seed=42 Pokec-z. Multi-seed
+[3, 7, 21, 42, 99] sur Pokec-z donne F1 = 0.884 ± 0.025 (stable) ;
+sur Pokec-n F1 = 0.657 ± 0.214 (brittle, 3 seeds sur 5 collapsent à
+F1 = 0.41 / 0.49 / 0.60). Le pipeline ULTIMATE-x-brut reste préféré
+pour la robustesse cross-dataset.*
 
 ### A.4 ULTIMATE composite — un seul fit règle TOUT (Pokec-z, seed=42)
 

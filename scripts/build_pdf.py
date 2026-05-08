@@ -20,7 +20,7 @@ h3 { font-size: 9.5pt; }
 p, li { margin: 0.1em 0; }
 ul, ol { margin: 0.15em 0; padding-left: 1.2em; }
 table { font-size: 8pt; margin: 0.25em 0; border-collapse: collapse; }
-th, td { padding: 1px 5px; }
+th, td { padding: 1px 5px; white-space: nowrap; }
 img { max-width: 92%; height: auto; }
 em { font-size: 8pt; color: #555; }
 hr { display: none; }
