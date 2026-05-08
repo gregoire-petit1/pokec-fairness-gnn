@@ -15,9 +15,9 @@ Attributs sensibles : `gender`, `region` (binaires), `age_group`
 
 **Méthodes** (toolbox de 5 familles) : GraphSAGE, **TabICL** (foundation
 tabulaire, no graph), Resampling, FairDrop, Reweighting Kamiran-Calders,
-**FairGNN** avec Gradient Reversal Layer (réimpl propre — l'original
-combinait `l_cls − λ·l_adv` dans un seul optimiseur, pas du min-max,
-F1 collapsait à 0.4834 à certains λ), **EOT/DPT** (Hardt 2016),
+**FairGNN** (Dai & Wang 2021) — méthode adversariale ; on a remplacé
+l'implémentation amont par une variante avec **Gradient Reversal
+Layer** pour stabiliser l'entraînement adversarial, **EOT/DPT** (Hardt 2016),
 **INLP** (Ravfogel 2020), et la chaîne composite multi-axes
 **INLP_composite + DPT_composite**.
 
@@ -216,15 +216,29 @@ Dai & Wang 2021 ; Kamiran & Calders 2012 ; Chouldechova 2017 ; Crenshaw
 1989 ; Hoffmann 2019 ; Hanna et al. 2020 (FAccT) ; Newman 2003 ; Qu et
 al. 2025 (TabICL) ; Laclau et al. 2024.
 
-### A.3 FairGNN — adversaire sur axe gender vs region (Pokec-z, multi-seed)
+### A.3 FairGNN — adversaire sur axe gender vs region (multi-seed Pokec-z/n)
 
-Source : `results/metrics/fairgnn_on_region.csv`. Validation que
-**l'adversaire doit cibler l'axe homophile**, pas l'axe attendu socialement.
+Source : `results/metrics/fairgnn_on_region.csv`. **Multi-seed [3, 7, 21,
+42, 99] × Pokec-z/n**. Validation empirique de l'effet du choix d'axe
+adversarial.
 
 | Adversaire | F1 | ΔDP region | Leakage region |
 |---|---:|---:|---:|
-| gender (`r ≈ 0`) | **0.853** | 0.073 | 0.666 |
-| **region (`r = 0.9`)** | **0.93** (à confirmer multi-seed) | en cours | en cours |
+| gender (`r ≈ 0`, axe inutile) | **0.853** | 0.073 | 0.666 |
+| **region (`r = 0.9`, axe homophile)** | **0.937** | 0.035 | **0.761** |
+| post-process **TabICL+DPT@region** | **0.947** | **0.017** | 0.621 |
+| post-process **TabICL+INLP+DPT@region** | 0.943 | 0.019 | **0.557** |
+
+**Lecture** : changer l'adversaire de gender (inutile) à region (homophile)
+**récupère 8 pp de F1** (0.85 → 0.94) — confirmation que l'axe doit être
+bien choisi. **Mais ΔDP région n'est réduit que modérément**, et le
+**leakage région augmente** (l'encoder apprend à tromper l'adversaire MLP
+de FairGNN sans supprimer le signal qu'un probe LR peut récupérer).
+**Post-process simple bat FairGNN sur les 3 métriques même sur le bon
+axe** : DPT@region donne un meilleur ΔDP, INLP+DPT@region un meilleur
+leakage, à un meilleur F1. *Conclusion renforcée du papier original* :
+post-process Pareto-domine in-training adversariale *quel que soit l'axe
+choisi*.
 
 ### A.4 Comparaison méthodes × axe region (Pokec-z, seed=42)
 
