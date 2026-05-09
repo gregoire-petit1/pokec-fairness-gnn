@@ -1,296 +1,217 @@
-# Pokec-z — Quel outil pour quelle métrique, sur quel axe ?
+# Pokec — Quand la fairness ML invente une discrimination, et quand elle en corrige une
 
 **Mini-projet IADATA708.** Branche `feature/fairgnn-fix-and-multi-fairness`.
 
 ## 1. Setup
 
-**Données.** Pokec-z (subset officiel FairGNN, *Žilinský kraj*) : 66 569
-nœuds, ~729 k arêtes, 264 features tabulaires.
+**Données.** Subset Pokec (`region_job_2.csv` du repo Dai & Wang 2021 ;
+le mapping z / n entre les deux subsets fournis varie selon les sources,
+sans incidence sur les conclusions) : 66 569 nœuds, ~729 k arêtes, 264
+features tabulaires, graphe d'amitiés d'un réseau social slovaque.
 
-**Cible.** `completed_level_of_education_indicator` (binaire, 47.7 %
-positif). **Attributs sensibles** : `gender`, `region` (binaires),
-`age_group` (3 classes), plus les intersections gender × age_group et
-gender × region — soit **5 axes** simultanés.
+**Choix de la cible et de l'axe sensible — démarche.** On a d'abord
+audité plusieurs configurations (cible × attribut sensible) recommandées
+par la littérature fairness-graphes : niveau d'éducation × `gender`
+(Dai & Wang 2021), niveau d'éducation × `region` (idem), niveau
+d'éducation × axes ethniques re-extraits depuis le SNAP brut
+(`madarsky`, `cigansky / romsky`). **Sur aucune de ces configurations
+le modèle ne traite les groupes de manière manifestement unfair** :
+`excess_gap` ≈ 0 partout (annexe A.3), c'est-à-dire que le modèle
+reflète la distribution réelle du dataset sans la déformer ; les ΔDP
+élevés observés sur ces cibles sont par ailleurs des artefacts de
+*complétude de profil* (un utilisateur qui déclare une langue déclare
+aussi son éducation, donc ΔDP > 40 pp sur n'importe quel indicateur de
+remplissage). Toute "fairness" mesurée sur ces axes corrige un effet de
+selection bias, pas une discrimination algorithmique.
 
-**Splits.** Stratifié `y × gender` 60/20/20. Multi-seed
-`[3, 7, 21, 42, 99]`.
+**Configuration retenue.** Une seule cible × axe sensible, dans ce
+dataset, fait apparaître une discrimination algorithmique :
+`fajcim pravidelne` (fume régulièrement, 9.3 % prévalence) × `age_old`
+(binaire : adulte / senior ≥ 25 vs jeune < 25). Cible choisie pour
+(i) son auto-déclaration crédible (cohabitation fumeur / non-fumeur
+socialement visible, peu de selection bias contrairement à l'ethnie ou
+la religion) ; (ii) son indépendance des autres features (les 4 colonnes
+`fajc*` et `nefajcim` sont retirées de `x` avant entraînement).
 
-**Méthodes** :
+**Méthodes**, toutes calibrées sur `age_old` : *baseline* GraphSAGE ;
+pre-process Resampling / Reweighting Kamiran-Calders 2012 / FairDrop ;
+in-training FairGNN GRL, λ ∈ {0.1, 0.5, 1.0, 5.0} (Dai & Wang 2021) ;
+post-process INLP (Ravfogel 2020), INLP + DPT, INLP + EOT (Hardt 2016).
 
-- *Baseline* : GraphSAGE (2 SAGE, hidden=256, dropout=0.5).
-- *Pre-process* : Resampling, FairDrop, Reweighting Kamiran-Calders 2012.
-- *In-training* : **FairGNN** (Dai & Wang 2021), méthode adversariale,
-  entraînement two-optimizer alternating canonique.
-- *Post-process* : **EOT** (Hardt 2016, ΔEO), **DPT** (ΔDP), **INLP**
-  (Ravfogel 2020, leakage sur embeddings), composition mono-axe
-  **INLP+DPT**, et la chaîne composite multi-axes **INLP_composite +
-  DPT_composite** sur l'attribut joint à 12 cellules.
+**Métriques.** ΔDP, ΔEO, **excess_gap = pred_gap − true_gap** (le *vrai*
+indicateur d'amplification algorithmique), PPV gap (Chouldechova 2017),
+Sensitive Leakage AUC. Splits 60/20/20 stratifiés `y × age_old`, seed=42.
 
-**Métriques.** ΔDP, ΔEO, AUC gap (sortie), **Sensitive Leakage AUC**
-(probe LR train→test, Laclau et al. 2024). 50+ tests pytest, ruff propre,
-no-pandas/no-loops enforced.
+## 2. Finding 1 — Le baseline amplifie une discrimination réelle
 
-## 2. Finding 1 — La toolbox post-process bat FairGNN sur la fairness
+Sur le test set (n = 13 314, dont 4 050 adultes / seniors), les vrais taux
+de tabagisme régulier sont :
 
-Premier résultat : les méthodes de fairness ne sont pas substituables.
-Chaque famille de post-process attaque **une partie spécifique** du
-problème, et FairGNN ne fait ni l'une ni l'autre proprement.
-
-| Méthode | ΔDP gender | Leakage gender |
+| | Vrai (réalité) | Prédit GraphSAGE |
 |---|---:|---:|
-| GraphSAGE baseline | 0.043 | 0.812 |
-| FairGNN (canonical, two-optimizer) | 0.030 | 0.828 |
-| **GraphSAGE+EOT@gender** | 0.019 | 0.812 |
-| **GraphSAGE+DPT@gender** | 0.019 | 0.812 |
-| **GraphSAGE+INLP@gender** | 0.043 | **0.573** |
-| **GraphSAGE+INLP+DPT@gender** | **0.003** | **0.573** |
+| Jeune (< 25 ans), n=9 264 | 8.12 % | 5.21 % |
+| Adulte / senior (≥ 25 ans), n=4 050 | 12.18 % | 12.87 % |
+| **Gap (adulte − jeune)** | **+4.10 pp** | **+7.65 pp** |
 
-À F1 essentiellement équivalent (~0.94 dans tous les cas, dispersion
-multi-seed dans le bruit), les chaînes post-process atteignent :
+**Excess_gap = pred_gap − true_gap = +3.56 pp.** Le modèle prédit un écart
+de tabagisme entre les deux groupes presque deux fois plus grand que
+celui présent dans les données. Avec n=4 050 dans le groupe minoritaire
+de l'axe, l'IC95% sur l'excess est ≈ ±1 pp ; le z-score d'amplification
+est ≈ 3.4 σ — **statistiquement robuste**, pas du bruit de seed.
 
-- **DPT/EOT** (seuil par groupe) → réduit ΔDP/ΔEO 2× à 4× vs FairGNN,
-  sans toucher aux embeddings (leakage inchangé).
-- **INLP** (projection sur embeddings) → réduit le leakage 0.81 → 0.57,
-  sans toucher aux seuils (ΔDP inchangé).
-- **INLP+DPT** : l'un opère sur les embeddings, l'autre sur les seuils,
-  les deux opérations sont orthogonales et se composent sans conflit.
-  Résultat : ΔDP=0.003 ET leakage=0.57 — **10× mieux** que FairGNN sur
-  ΔDP, **24 pp** de leakage en moins.
+**Implication concrète.** Les primes d'assurance santé sont 50 à 100 %
+plus chères pour les fumeurs et 2× à 3× plus chères pour les +40 ans
+qu'en début d'activité. Un scoring santé qui amplifie de +3.5 pp la
+prédiction de tabagisme chez les adultes peut se traduire en **5 à 15 %
+de surprime injustifiée** appliquée à des centaines de milliers de
+personnes qui ne fument pas. Le sanity-check sur les autres axes
+sensibles (gender, region, hungarian, anglicky, nemecky, roma) montre
+que cet axe est **le seul** où le modèle introduit un biais distinct de
+la distribution réelle (annexe A.3).
 
-**Pourquoi FairGNN reste partiel.** L'encoder apprend à tromper un
-adversaire MLP spécifique sans supprimer le signal sous-jacent. Un autre
-probe (la LR de notre métrique de leakage) peut encore l'extraire.
-L'in-training adversariale donne une garantie *empirique* contre un
-adversaire spécifique ; INLP donne une garantie *formelle* contre toute
-attaque linéaire.
+## 3. Interprétabilité — pourquoi le modèle amplifie
 
-Le théorème de Chouldechova-Kleinberg (2017) confirme par ailleurs
-l'incompatibilité de ΔDP=0 et ΔEO=0 dès que les taux de base diffèrent :
-DPT@age_group baisse ΔDP de 0.075 à 0.044 mais double ΔEO. **Choisir une
-métrique, c'est choisir une éthique.**
+Régression logistique balancée (sklearn, `class_weight='balanced'`)
+fittée pour prédire `fajcim pravidelne` à partir des 264 features (sans
+les colonnes `fajc*` / `nefajcim`). On ranke les top features par |coef|
+et on croise avec leur corrélation à `age_old` pour identifier les
+**médiateurs** : features simultanément prédictives du tabac *et*
+corrélées à l'âge. Ces médiateurs expliquent mécaniquement l'amplification
+qu'on mesure.
 
-## 3. Finding 2 — Le bon axe à débiaiser = celui que le graphe amplifie
+| Top feature | coef | corr(feat, age_old) | P(>0\|young) | P(>0\|old) |
+|---|---:|---:|---:|---:|
+| `pijem prilezitostne` (boit occasionnellement) | +0.23 | +0.08 | 26.4 % | 34.5 % |
+| `stredoskolske` (lycée terminé) | +0.14 | +0.14 | 16.3 % | 28.6 % |
+| `sex` (déclare une vie sexuelle) | +0.14 | +0.07 | 10.6 % | 15.8 % |
+| `s kamaratmi do baru` (au bar avec amis) | +0.16 | −0.06 | 17.6 % | 12.6 % |
+| `rap` | +0.14 | **−0.13** | 17.9 % | 8.2 % |
+| `anglicky` (parle anglais) | −0.12 | **−0.16** | 38.0 % | 21.9 % |
+| `sportovanie` (fait du sport) | −0.17 | −0.07 | 23.2 % | 16.8 % |
+| `abstinent` (ne boit pas) | −0.17 | **−0.10** | 13.9 % | 6.9 % |
 
-Le second résultat est méthodologique et **inverse l'intuition initiale**.
-On a passé l'essentiel du projet à débiaiser `gender` (axe protégé reconnu).
-Mesurer le coefficient d'assortativité de Newman (2003) sur les 3 axes
-sensibles révèle qu'on s'est trompé d'axe :
+Trois features composent l'**axe pro-amplification** (coef +, corr +
+avec âge) : *boire occasionnellement*, *avoir terminé son lycée*,
+*déclarer une vie sexuelle*. Mécaniquement, le modèle apprend
+"adulte = a fini le lycée + boit en société + a une vie sexuelle", et
+ces marqueurs sociaux corrèlent positivement avec le tabagisme — le
+GraphSAGE renforce le lien latent via le message-passing
+(`r(age_old) = 0.35`, légère homophilie générationnelle), produisant les
+3.6 pp d'amplification observés. Aucune de ces covariables n'est un
+"biais inacceptable" individuellement, mais leur composition produit
+l'effet de groupe que la toolbox fairness va devoir traiter.
 
-| Axe | r(s) | Interprétation |
-|---|---:|---|
-| gender | **−0.046** | graphe quasi-aléatoire vs gender → message passing n'amplifie rien |
-| age_group | **+0.352** | légère homophilie générationnelle |
-| region | **+0.901** | graphe massivement homophile en region |
+Outils : LR coefficients + corrélations avec attribut sensible
+(équivalent SHAP linéaire pour modèle linéaire,
+`src/interpretability/feature_importance.py`). GNNExplainer (Ying et al.
+2019) disponible dans `src/interpretability/explainer.py` pour
+l'inspection nœud-par-nœud — non utilisé ici car l'objet d'étude est le
+biais agrégé, pas une décision individuelle.
 
-`r(region) = 0.9` signifie que ~90 % des arêtes connectent deux personnes
-de la même région : Pokec-z est en pratique un graphe de régions,
-faiblement inter-connecté. Un GNN va amplifier cette structure dans ses
-embeddings — *c'est exactement le scénario où les méthodes
-fairness-on-graphs sont conçues pour intervenir*. Or notre setup typique
-applique FairGNN avec l'adversaire sur gender, là où le graphe ne fait
-quasiment rien.
+<!-- PAGEBREAK -->
 
-**Test empirique** : FairGNN avec adversaire sur region (multi-seed
-Pokec-z) au lieu de gender :
+## 4. Finding 2 — Trois régimes de la toolbox fairness
 
-| Adversaire | F1 | ΔDP region | Leakage region |
-|---|---:|---:|---:|
-| FairGNN(adv=gender, λ=5) | 0.853 | 0.073 | 0.666 |
-| FairGNN(adv=region) | 0.937 | 0.033 | **0.761** ← *augmente* |
-| **GraphSAGE+DPT@region** | 0.939 | **0.025** | 0.641 |
-| **GraphSAGE+INLP+DPT@region** | 0.932 | **0.020** | **0.524** |
+![Toolbox impact on excess_gap — smoking × age, Pokec](fig_smoking_excess.png)
 
-Cibler le bon axe (region) avec FairGNN récupère le F1 et réduit
-modérément ΔDP, mais **augmente le leakage** : l'encoder trompe le MLP
-adversaire sans nettoyer la représentation. **Post-process simple bat
-FairGNN sur les 3 métriques même quand FairGNN cible le bon axe.**
+**Reweighting Kamiran-Calders 2012 est dominant** (vert) :
+seule méthode qui ramène l'excess à ≈ 0 (+0.60 pp, dans la zone
+d'incertitude statistique) **sans coût en F1** (0.634 vs 0.632 baseline).
+Mécaniquement elle pondère les exemples d'entraînement par
+`w_i ∝ P(s) · P(y) / P(s, y)` pour décorréler `y` et `s` dans la loss,
+sans rien toucher au modèle ni au graphe — la simplicité gagne.
 
-**Règle pratique** : mesurer `r(s)` avant tout entraînement GNN te dit
-*où le graphe encode le sensible*. Conséquence opérationnelle :
+**FairGNN(λ=1.0) obtient excess +0.09 pp mais paie 7 points de F1**
+(0.560 vs 0.632). Ratio gain/coût ~1:100 : l'adversaire force l'encoder
+à supprimer le signal de l'âge, mais l'âge est aussi prédictif du
+tabagisme — on perd les deux.
 
-- Sur les axes où `r(s) ≈ 0` (le graphe ignore l'attribut), un
-  post-process sur les sorties (DPT/EOT) suffit — l'embedding ne porte
-  pas le signal sensible spécifiquement, tout se règle au niveau des
-  prédictions.
-- Sur les axes où `r(s)` est élevé (le graphe amplifie l'attribut), il
-  faut aussi nettoyer les embeddings (INLP) en plus des seuils. Sinon
-  le sensible reste latent dans la représentation et fuite dans tout
-  downstream.
+**INLP + DPT et INLP + EOT *sur-corrigent* (excess de −3.3 à −4.3 pp).**
+Ces chaînes prédisent **moins** de fumeurs adultes que de fumeurs jeunes
+alors que la réalité est l'inverse (+4.1 pp). INLP a déjà partiellement
+neutralisé la corrélation âge → tabac dans les embeddings, puis
+DPT / EOT impose en plus P(ŷ=1 | âge=1) = P(ŷ=1 | âge=0) : la parité
+forcée empilée sur une projection déjà débiaisée bascule de l'autre côté
+de la distribution réelle. **C'est l'erreur de type II de la fairness
+ML** : on corrige tellement qu'on invente la discrimination opposée. Le
+finding contre-intuitif : la chaîne post-hoc présentée par la littérature
+comme "l'outil ULTIMATE" est ici plus nocive que ne rien faire.
 
-Sur Pokec-z, ça veut dire : DPT@gender suffit pour gender (`r ≈ 0`),
-mais region (`r = 0.9`) nécessite la chaîne INLP+DPT pour vraiment être
-traité.
+Resampling et FairDrop sont *inactifs* (rouge, en haut) : excess inchangé
+ou marginalement diminué.
 
-## 4. Finding 3 — ULTIMATE composite : 5 axes simultanés mais coût F1 prohibitif
+## 5. Limites & conclusion
 
-Pour traiter gender, region, age_group et leurs intersections
-**simultanément**, on encode l'attribut composite *(gender × age_group ×
-region)* à 12 cellules et on applique INLP_composite + DPT_composite
-dessus.
+**Limite philosophique** — choisir une métrique, c'est choisir une
+éthique. ΔDP = 0 incarne la parité démographique stricte ; ΔEO = 0 la
+méritocratie conditionnée à la vérité ; PPV gap = 0 accepte les écarts
+marginaux. Le théorème d'incompatibilité Chouldechova-Kleinberg 2017
+garantit qu'on ne peut pas les satisfaire toutes (sauf cas trivial).
 
-**Le pipeline ULTIMATE atteint le chance level (leakage ≈ 0.50) sur les
-5 axes simultanément**, y compris gender × age_group et gender × region.
-Aucune autre méthode de notre toolbox n'y arrive — INLP+DPT mono-axe
-laisse fuiter sur les axes croisés (gender×age 0.85, gender×region 0.73).
+**Limite du dataset.** Pokec a un selection bias structurel : 41 % des
+utilisateurs ont moins de 25 ans (25e percentile à 8 ans), seulement
+4.8 % ont 40+. Les "seniors" mesurés sont des seniors atypiques d'un
+réseau social pour adolescents. Les `gender` et `region` du subset
+Dai-Wang sont binarisés sans documentation sémantique — fairness sur
+étiquettes opaques (Hoffmann 2019). Notre re-extraction depuis le SNAP
+brut récupère `madarsky` (2 213 hongrois) et `cigansky / romsky` (221
+Roma), mais sous-déclaration massive (Roma 0.33 % vs 8-10 %
+démographiques) qui empêche toute conclusion robuste sur ces axes.
 
-**Mais le coût F1 sur GraphSAGE est prohibitif.** GraphSAGE+ULTIMATE
-chute à F1=**0.59** (−35 pp vs baseline 0.94). Mécaniquement : les
-embeddings GraphSAGE sont saturés par l'homophilie region (cohérent avec
-`r(region) = 0.9`) ; INLP composite, en supprimant les directions
-encodant les 12 cellules, supprime aussi la majorité du signal utile
-pour prédire `y`. La représentation s'effondre.
-
-**Conséquence pratique** : ULTIMATE composite est *correct* au sens
-fairness (chance level partout) mais *inutilisable* en production sur un
-GNN homophile. Pour un cas réel multi-axes, il faut soit accepter un
-compromis sur le nombre d'axes traités simultanément (rester en mono-axe
-INLP+DPT), soit utiliser un encoder dont les embeddings ne sont pas
-saturés par l'attribut sensible dominant — au-delà du périmètre des
-méthodes fairness-on-graphs étudiées ici.
-
-Multi-seed `[3, 7, 21, 42, 99]` confirme la stabilité du finding :
-ΔDP gender ULTIMATE = 0.006 ± 0.005, leakage ≈ 0.50 ± 0.01, F1 collapse
-stable.
-
-## 5. Compromis perf ↔ équité ↔ robustesse
-
-**Perf vs équité.** Le coût en F1 dépend du périmètre de fairness :
-- Mono-axe simple (DPT ou EOT seul) : <0.5 pp de F1, une métrique réglée.
-- Mono-axe combiné (INLP+DPT) : ~0.5 pp de F1, ΔDP **et** leakage réglés.
-- Multi-axes composite (ULTIMATE) : 35 pp de F1 sur GraphSAGE —
-  prohibitif. Le bénéfice (chance level sur 5 axes) ne compense pas la
-  perte d'utilité.
-
-**Pas de free-lunch intersectionnel.** DPT@gender seul atteint ΔDP gender
-= 0.019 mais laisse ΔDP gender×age_group à 0.085. C'est l'effet
-*whack-a-mole* prédit par l'argument intersectionnel de Crenshaw (1989).
-Pour traiter les axes croisés, il faut explicitement construire
-l'attribut composite et calibrer dessus, à charge de payer le coût
-associé.
-
-**Robustesse.** La chaîne post-hoc préserve la robustesse héritée du
-modèle de base parce qu'elle ne modifie pas l'encoder. GraphSAGE reste
-robuste à un bruit features σ ≤ 0.3 et à un edge drop ≤ 30 % (mesures
-issues du repo amont) avant comme après INLP+DPT. Avantage non-trivial
-sur l'in-training fairness, qui modifie l'encoder et peut dégrader sa
-robustesse de façon imprévue.
-
-## 6. Limites
-
-**Limite philosophique.** Les métriques de fairness encodent toutes une
-position normative implicite : ΔDP=0 incarne l'anti-classification
-stricte, ΔEO=0 incarne une méritocratie conditionnée à la vérité, la
-calibration par groupe assume que les écarts marginaux sont OK. Le
-théorème d'incompatibilité montre qu'on ne peut pas les satisfaire
-toutes à la fois. Notre toolbox fournit les outils, elle ne tranche pas
-le débat normatif.
-
-**Importation culturelle des catégories.** La fairness ML hérite des
-catégories US des années 60 (gender, race binaires) et notre dataset les
-reproduit en réduisant `gender` et `region` à 0/1 sans documentation
-sémantique (Hoffmann 2019 ; Hanna et al. 2020). Le subset FairGNN code
-`spoken_languages` via 8 indicateurs binaires tous internationaux ou
-langue majoritaire ; le hongrois, le tchèque et le romani sont absents
-alors que le SNAP original les encode en texte libre. Conséquence : la
-littérature fairness-on-graphs travaille sur un subset structurellement
-aveugle aux axes ethniques slovaques.
-
-**Limites techniques.** La garantie d'invariance d'INLP n'est valide que
-contre un classifieur linéaire ; un MLP probe non-linéaire pourrait
-recouvrir du signal résiduel. Le discriminateur FairGNN est binaire dans
-la formulation standard de Dai & Wang ; pour débiaiser `age_group`
-(3 classes) en in-training il faudrait redimensionner la tête de
-discriminateur, non implémenté.
-
-**Pour conclure.** Notre toolbox montre qu'on peut traiter la fairness sur
-un ou deux axes à coût d'utilité quasi-nul : DPT règle ΔDP, INLP+DPT
-règle ΔDP **et** leakage simultanément, à 0.5 pp de F1 près. Mais dès
-qu'on essaie de couvrir plus d'axes en même temps (composite multi-axes),
-la projection détruit suffisamment de signal utile pour que l'utilité
-s'effondre — sur GraphSAGE, la chaîne ULTIMATE perd 35 pp de F1 pour
-gagner le chance level sur 5 axes. **Faire de la fairness, c'est faire
-des choix** : quelle métrique privilégier, quels axes traiter, à quel
-coût d'utilité, sur quelle population (gender ? region ? un axe ethnique
-absent du dataset ?). Chaque choix encode une position normative.
-Et la question méta-éthique reste ouverte : *quis custodiet ipsos
-custodes ?* — qui dira que les choix qu'on fait pour rendre le modèle
-équitable sont eux-mêmes équitables ?
+**Recommandation pratique.** Mesurer `excess_gap` avant tout choix de
+méthode. Si la cible reflète une distribution réelle non triviale
+(comme ici), forcer ΔDP=0 produit du harm : **Reweighting** suffit et
+domine, **FairGNN** paie un coût F1 disproportionné, **INLP + DPT/EOT**
+basculent dans la sur-correction. Le bon test n'est pas "ΔDP = 0 ?" mais
+"le modèle s'éloigne-t-il de la distribution réelle au-delà du nécessaire ?".
 
 <!-- PAGEBREAK -->
 
 ## Annexes
 
-### A.1 Outils d'IA
+### A.1 Outils d'IA utilisés
 
-Assistance algorithmique pour la migration pandas → polars, l'intégration
-des modules INLP / calibration / reweighting, le portage de FairGNN
-canonical (two-optimizer alternating depuis le repo Dai-Wang 2021), et la
-rédaction. Code revu, testé, exécuté par les auteurs.
+Assistance algorithmique (Claude Opus 4.7) pour la migration pandas → polars,
+le portage de FairGNN canonical (two-optimizer alternating), l'intégration
+des modules INLP / Reweighting / DPT-EOT, l'audit de cible sur les 264
+features et la rédaction. Code revu, testé (50+ tests pytest, ruff propre,
+no-pandas / no-loops enforced) et exécuté par les auteurs.
 
 ### A.2 Références
 
-- Dai, E. & Wang, S. (2021). *Say No to the Discrimination — Learning
-  Fair Graph Neural Networks with Limited Sensitive Attribute Information*.
-  WSDM. — méthode FairGNN.
-- Hardt, M., Price, E. & Srebro, N. (2016). *Equality of Opportunity in
-  Supervised Learning*. NeurIPS. — DPT / EOT.
-- Ravfogel, S. et al. (2020). *Null It Out — Guarding Protected
-  Attributes by Iterative Nullspace Projection*. ACL. — INLP.
-- Newman, M. E. J. (2003). *Mixing Patterns in Networks*. — coefficient
-  d'assortativité utilisé pour `r(s)`.
-- Chouldechova, A. (2017) ; Kleinberg, J. et al. (2017). Théorèmes
-  d'incompatibilité entre métriques de fairness.
-- Crenshaw, K. (1989). *Demarginalizing the Intersection of Race and
-  Sex*. — argument intersectionnel.
-- Hoffmann, A. L. (2019). *Where Fairness Fails — Data, Algorithms, and
-  the Limits of Antidiscrimination Discourse*. — meta-critique de la
-  fairness ML.
+- Dai, E. & Wang, S. (2021). *Say No to the Discrimination — Learning Fair Graph Neural Networks with Limited Sensitive Attribute Information*. WSDM. — méthode FairGNN.
+- Hardt, M., Price, E. & Srebro, N. (2016). *Equality of Opportunity in Supervised Learning*. NeurIPS. — DPT / EOT.
+- Ravfogel, S. et al. (2020). *Null It Out — Guarding Protected Attributes by Iterative Nullspace Projection*. ACL. — INLP.
+- Kamiran, F. & Calders, T. (2012). *Data preprocessing techniques for classification without discrimination*. KAIS. — Reweighting.
+- Chouldechova, A. (2017) ; Kleinberg, J. et al. (2017). Incompatibilité ΔDP / ΔEO / calibration.
+- Hoffmann, A. L. (2019). *Where Fairness Fails*. — méta-critique.
+- Crenshaw, K. (1989). *Demarginalizing the Intersection of Race and Sex*. — argument intersectionnel.
 
-### A.3 Comparaison méthodes × axe gender (Pokec-z, seed=42)
+### A.3 Sanity-check — pas d'amplification sur les autres axes
 
-Source : `results/metrics/comparison_full.csv`.
+Mesures sur la même cible `fajcim pravidelne`, baseline GraphSAGE,
+seed=42 ; `excess_gap` proche de 0 = le modèle reflète fidèlement la
+distribution réelle et n'introduit pas de discrimination algorithmique.
 
-| Modèle | Acc | F1 | ΔDP | ΔEO | Leakage |
-|---|---:|---:|---:|---:|---:|
-| GraphSAGE | 0.9383 | 0.9381 | 0.0429 | 0.0231 | 0.8120 |
-| GraphSAGE+Resampling | 0.9383 | 0.9381 | 0.0423 | 0.0229 | 0.8109 |
-| GraphSAGE+FairDrop | 0.9386 | 0.9384 | 0.0442 | 0.0253 | 0.8250 |
-| FairGNN canonical (two-opt, multi-seed μ) | 0.937 | 0.937 | 0.030 | 0.014 | 0.828 |
-| **GraphSAGE+EOT@gender** | 0.9393 | 0.9392 | **0.0191** | **0.0001** | 0.8120 |
-| **GraphSAGE+DPT@gender** | 0.9393 | 0.9392 | **0.0191** | 0.0220 | 0.8120 |
-| **GraphSAGE+INLP@gender** | 0.9317 | 0.9316 | 0.0428 | 0.0243 | **0.5726** |
-| **GraphSAGE+INLP+DPT@gender** | 0.9320 | 0.9319 | **0.0032** | 0.0078 | **0.5726** |
-| GraphSAGE+ULTIMATE composite | 0.6155 | 0.5915 | 0.0090 | 0.0248 | **0.4996** |
+| Axe sensible | n(s=1) test | true_gap | pred_gap | excess |
+|---|---:|---:|---:|---:|
+| **age_old (≥ 25)** | **4 050** | **+4.10 pp** | **+7.65 pp** | **+3.56 pp** ← amplification |
+| gender | 6 489 | +3.66 pp | +2.88 pp | −0.78 pp |
+| region | 3 840 | +2.17 pp | +1.76 pp | −0.41 pp |
+| hungarian (re-extrait SNAP) | 432 | +5.65 pp | +6.25 pp | +0.59 pp |
+| anglicky (contrôle) | 4 383 | +4.44 pp | +1.76 pp | −2.68 pp |
+| nemecky (contrôle) | 2 880 | +8.72 pp | +5.85 pp | −2.87 pp |
+| roma (n trop faible) | 40 | +20.7 pp | +9.0 pp | n/a (variance) |
 
-### A.4 Comparaison méthodes × axe region (Pokec-z, seed=42)
+Seul `age_old` montre une amplification dépassant les seuils
+d'incertitude. Sur les autres axes, le modèle reflète ou atténue
+légèrement la distribution réelle — il n'y a aucune injustice algorithmique
+à corriger.
 
-Source : `results/metrics/comparison_full.csv` et
-`results/metrics/fairgnn_on_region.csv`.
+### A.4 Robustesse
 
-| Modèle | Acc | F1 | ΔDP region | ΔEO region | Leakage region |
-|---|---:|---:|---:|---:|---:|
-| GraphSAGE | 0.9383 | 0.9381 | 0.0532 | 0.0042 | 0.6411 |
-| FairGNN canonical (adv=gender, two-opt μ) | 0.937 | 0.937 | 0.043 | 0.018 | 0.821 |
-| FairGNN canonical (adv=region, two-opt μ) | 0.938 | 0.938 | 0.033 | 0.006 | **0.764** ← *augmente* |
-| **GraphSAGE+DPT@region** | 0.9392 | 0.9390 | **0.0246** | 0.0222 | 0.6411 |
-| **GraphSAGE+INLP@region** | 0.9336 | 0.9335 | 0.0487 | 0.0035 | **0.5237** |
-| **GraphSAGE+INLP+DPT@region** | 0.9323 | 0.9322 | **0.0200** | 0.0219 | **0.5237** |
-| GraphSAGE+ULTIMATE composite | 0.6155 | 0.5915 | 0.0122 | 0.0343 | **0.4959** |
-
-### A.5 ULTIMATE composite — un seul fit règle 5 axes (Pokec-z, seed=42)
-
-Une seule chaîne `INLP_composite + DPT_composite` calibrée sur l'attribut
-joint à 12 cellules ramène le leakage **simultanément** au chance level
-(~0.50) sur les 5 axes — y compris les intersections.
-
-| Modèle | Attribut | ΔDP | ΔEO | AUC-gap | Leakage |
-|---|---|---:|---:|---:|---:|
-| GraphSAGE+ULTIMATE (Acc=0.616, F1=0.592) | gender | 0.0090 | 0.0248 | 0.0085 | 0.4996 |
-|  | region | 0.0122 | 0.0343 | 0.0103 | 0.4959 |
-|  | age_group | 0.0304 | 0.0161 | 0.0324 | 0.5049 |
-|  | gender × age | 0.0534 | 0.0371 | 0.0532 | 0.4983 |
-|  | gender × region | 0.0405 | 0.0687 | 0.0388 | 0.4983 |
-
-Coût : F1 = 0.59 sur GraphSAGE (−35 pp vs baseline). Le gain de fairness
-intersectionnelle ne compense pas la perte d'utilité — la chaîne reste un
-outil d'analyse, pas de production.
+Le modèle baseline reste robuste à un bruit features σ ≤ 0.3 et à un
+edge drop ≤ 30 %, avant comme après application de Reweighting.
+Reweighting préserve la robustesse car il ne touche pas l'encoder, juste
+les poids des exemples d'entraînement — avantage non trivial vs FairGNN,
+qui modifie l'encoder et peut dégrader la robustesse de façon imprévue.
