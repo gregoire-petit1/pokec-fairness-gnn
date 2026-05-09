@@ -339,6 +339,13 @@ def _evaluate_classifier(
             proba_val = proba_full_t[val_mask].cpu().numpy().astype(np.float32)
         extra["proba_val_pos"] = proba_val[:, 1] if proba_val.shape[1] >= 2 else proba_val.ravel()
 
+    # Store the model's state_dict in extra so downstream tools (e.g. GNNExplainer)
+    # can reload the trained weights without re-running training.
+    extra["model_state_dict"] = {
+        k: v.detach().cpu().clone() for k, v in model.state_dict().items()
+    }
+    extra["model_class"] = type(model).__name__
+
     return ModelOutput(
         name=name, acc=acc, f1=f1, pred=pred, proba=proba_test, embeddings=emb, extra=extra
     )

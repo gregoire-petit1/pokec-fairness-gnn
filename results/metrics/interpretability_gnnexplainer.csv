@@ -1,0 +1,16 @@
+rank,feature,mean_importance
+1,completion_percentage,0.5945337
+2,spoken_languages_indicator,0.5923333
+3,hair_type_indicator,0.5902771
+4,hair_color_indicator,0.5854986
+5,eye_color_indicator,0.5830897
+6,body_type_indicator,0.57510793
+7,relation_to_alcohol_indicator,0.5735403
+8,favourite_color_indicator,0.5703118
+9,relation_to_smoking_indicator,0.56619287
+10,stredoskolske,0.5646831
+11,I_like_books_indicator,0.56232184
+12,marital_status_indicator,0.5594431
+13,anglicky,0.5506858
+14,bedminton,0.54826355
+15,relation_to_casual_sex_indicator,0.5437701

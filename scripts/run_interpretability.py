@@ -180,15 +180,16 @@ def main() -> None:
         print(f"[SKIP] GraphSAGE cache absent ({cache_path}). Lancer main_experiment d'abord.")
         return
     cached = torch.load(cache_path, weights_only=False, map_location=device)
-    if "model_state_dict" not in cached:
-        print("[SKIP] cached ModelOutput n'a pas de model_state_dict, GNNExplainer impossible")
-        print(f"       (cache contient: {list(cached.keys())})")
+    state_dict = cached.get("extra", {}).get("model_state_dict")
+    if state_dict is None:
+        print("[SKIP] cached ModelOutput n'a pas de extra['model_state_dict'].")
+        print("       Re-lancer main_experiment.py (sans cache) pour repopuler.")
         return
 
     model = GraphSAGE(
         in_channels=data.x.shape[1], hidden_channels=256, out_channels=2, num_layers=2
     ).to(device)
-    model.load_state_dict(cached["model_state_dict"])
+    model.load_state_dict({k: v.to(device) for k, v in state_dict.items()})
     model.eval()
 
     top_feat_b, summary_b = option_b_gnnexplainer(data, model, test_idx, device)
