@@ -1,0 +1,202 @@
+\documentclass[10pt,a4paper,twocolumn]{article}
+
+% Langue / encodage
+\usepackage[french]{babel}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+
+% Maths / figures / tableaux
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{float}
+\usepackage{booktabs}
+\usepackage{longtable}
+
+% Mise en page
+\usepackage{geometry}
+\geometry{
+  left=1.5cm,
+  right=1.5cm,
+  top=0cm,
+  bottom=1.6cm
+}
+
+\usepackage{setspace}
+\setstretch{1.05}
+
+% Bloc titre pleine largeur en mode twocolumn
+\usepackage{cuted}
+
+% Style
+\usepackage{xcolor}
+\definecolor{darkgreen}{RGB}{20,90,55}
+\definecolor{lightgreen}{RGB}{235,245,240}
+
+\usepackage{titlesec}
+\titleformat{\section}
+  {\color{darkgreen}\large\bfseries}
+  {\thesection.}{0.5em}{}
+
+\titleformat{\subsection}
+  {\bfseries\normalsize}
+  {\thesubsection.}{0.5em}{}
+
+\titlespacing*{\section}{0pt}{0.5cm}{0.2cm}
+\titlespacing*{\subsection}{0pt}{0.25cm}{0.1cm}
+
+% Header / footer
+\usepackage{fancyhdr}
+\pagestyle{fancy}
+\fancyhf{}
+\fancyfoot[L]{\small Télécom Paris}
+\fancyfoot[C]{\thepage}
+\fancyfoot[R]{\small MS IA Expert Data \& MLOps}
+\renewcommand{\footrulewidth}{0.4pt}
+
+% Liens
+\usepackage[hidelinks]{hyperref}
+\usepackage{url}
+
+% Code
+\usepackage{listings}
+\usepackage{inconsolata}
+\lstset{
+  basicstyle=\ttfamily\footnotesize,
+  breaklines=true,
+  frame=single,
+  backgroundcolor=\color{gray!10}
+}
+
+% Encadrés
+\usepackage{tcolorbox}
+\tcbset{
+  colback=lightgreen,
+  colframe=lightgreen,
+  boxrule=0pt,
+  arc=2mm,
+  left=2mm,
+  right=2mm,
+  top=2mm,
+  bottom=2mm
+}
+
+% TikZ
+\usepackage{tikz}
+\usetikzlibrary{positioning,shapes.multipart,arrows.meta,calc,backgrounds}
+
+\tikzset{
+  lifeline/.style={densely dashed, thick},
+  actor/.style={font=\sffamily\bfseries},
+  msg/.style={-Latex, very thick},
+  note/.style={font=\ttfamily\small, align=left, fill=white, inner sep=1pt}
+}
+
+% Commandes perso
+\newcommand{\sautitemize}{\vspace*{0.3cm}\indent}
+\newcommand{\sautno}{\vspace*{0.3cm}\\}
+\newcommand{\saut}{\vspace*{0.3cm}\\\indent}
+\newcommand{\sautp}{\\\indent}
+\newcommand{\sautpp}{\\\noindent}
+\newcommand{\sen}{\operatorname{\sen}}
+
+\nocite{*}
+
+\begin{document}
+
+\begin{strip}
+
+\begin{center}
+
+\begin{minipage}{0.45\textwidth}
+\flushleft
+\includegraphics[width=0.45\linewidth]{images/Logo_TelecomParis.png}
+\end{minipage}
+\begin{minipage}{0.45\textwidth}
+\flushright
+\includegraphics[width=0.35\linewidth]{images/Logo_IMT.png}
+\end{minipage}
+\vspace{0.5cm}
+
+{\Large \textbf{IADATA708 - Machine learning équitable et interprétable}}\\[0.25cm]
+
+{\huge \bfseries \color{darkgreen} Fairness et interprétabilité sur Pokec }\\[0.4cm]
+\vspace{0.15cm}
+
+{\Large
+Julien LAFRANCE, Yassine MERNISSI, Grégoire PETIT, Benjamin LEPOURTOIS }\\[0.25cm]
+
+{\large
+Télécom Paris - MS IA Expert Data \& MLOps - Année universitaire 2025-2026
+}\\[0.4cm]
+
+\end{center}
+
+\begin{tcolorbox}
+\textbf{Abstract.}
+Ce rapport étudie les enjeux de machine learning équitable et interprétable.
+L’objectif est d’analyser les biais présents dans les données et les modèles, d’évaluer différentes métriques de fairness, puis de comparer plusieurs méthodes de mitigation et d’explicabilité appliquées à un cas d’usage supervisé.
+\end{tcolorbox}
+
+\vspace{0.05cm}
+\end{strip}
+
+%%%%%% _____ INTRODUCTION _____ %%%%%%%
+\section{Introduction}
+
+\subsection{Choix du dataset}
+
+Dans un contexte de transition énergétique et de volatilité croissante des prix de l'électricité, la compréhension fine de sa 
+
+\vspace*{0.2cm}
+Par ailleurs, la production d'électricité en France devient de plus en plus intermittente avec le déploiement massif des énergies renouvelables (éolien, solaire). Comprendre les corrélations entre météo, production nationale et consommation personnelle permet d'anticiper les tensions sur le réseau et d'adapter ses usages en conséquence.
+
+\vspace*{0.2cm}
+\textbf{Problématique :} Toto
+ 
+
+%%%%%% _____ BASELINE _____ %%%%%%%
+\section{Notre baseline}
+Un petit rappel
+\subsection{Notre algorithme}
+Nous avons décidé de choisir GraphSAGE ? pourquoi aps les autres GCN ? GAT ? etc?  
+
+Nous avons décidé de prendre comme label explicatif ....
+
+\textbf{Notre label}
+
+\textbf{Nos résultats}
+
+
+%%%%%% _____ FAIRNESS _____ %%%%%%%
+\section{Méthode d'équité}
+Petite introduction s'impose sur les méthodes d'équité.
+
+\subsection{Pre-processing}
+
+\subsection{In-processing}
+
+\subsection{Post-processing}
+
+
+%%%%%% _____ INTERPRETABILITY _____ %%%%%%%
+\section{Outil d'interprétabilité}
+\subsection{Choix de l'outil}
+
+\subsection{Nos performances}
+
+%%%%%% _____ ROBUSTESNESS _____ %%%%%%%
+\section{Robustèsse du modèle}
+Robustesse du modèle face à une pertubation controlée (bruit, dégradation des entrées, distribution shift)
+\subsection{Choix de l'outil}
+
+\subsection{Nos performances}
+
+%%%%%% _____ ROBUSTESNESS _____ %%%%%%%
+\section{Conclusion et discussion}
+\subsection{Choix de l'outil}
+
+\subsection{Nos performances}
+
+\subsection{Utilisation de l'IA}
+Dire que l'IA a été utilisé pour X et pour Y.
+\end{document}

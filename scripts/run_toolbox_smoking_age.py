@@ -302,6 +302,28 @@ def main() -> None:
     _record(f"FairGNN(λ={out.extra.get('chosen_lambda')})@age_old", out)
 
     # ── Post-process ────────────────────────────────────────────────────────
+    print("\n[6a] DPT@age_old alone (per-group threshold on baseline, no INLP)")
+    out_dpt_alone = apply_equal_opportunity_threshold(
+        baseline,
+        data,
+        val_mask,
+        test_mask,
+        sensitive_name="age_old",
+        strategy="demographic_parity",
+    )
+    _record("GraphSAGE+DPT@age_old", out_dpt_alone)
+
+    print("\n[6b] EOT@age_old alone (per-group threshold on baseline, no INLP)")
+    out_eot_alone = apply_equal_opportunity_threshold(
+        baseline,
+        data,
+        val_mask,
+        test_mask,
+        sensitive_name="age_old",
+        strategy="equal_opportunity",
+    )
+    _record("GraphSAGE+EOT@age_old", out_eot_alone)
+
     print("\n[6] INLP@age_old (project axis from baseline embeddings + refit head)")
     t0 = time.time()
     out_inlp = apply_inlp_to_embeddings(

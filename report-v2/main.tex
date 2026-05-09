@@ -1,0 +1,335 @@
+\documentclass[10pt,a4paper,twocolumn]{article}
+
+% Langue / encodage
+\usepackage[french]{babel}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+
+% Maths / figures / tableaux
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{float}
+\usepackage{booktabs}
+\usepackage{longtable}
+
+% Mise en page
+\usepackage{geometry}
+\geometry{
+  left=1.5cm,
+  right=1.5cm,
+  top=0cm,
+  bottom=1.6cm
+}
+
+\usepackage{setspace}
+\setstretch{1.05}
+
+% Bloc titre pleine largeur en mode twocolumn
+\usepackage{cuted}
+
+% Style
+\usepackage{xcolor}
+\definecolor{darkgreen}{RGB}{20,90,55}
+\definecolor{lightgreen}{RGB}{235,245,240}
+
+\usepackage{titlesec}
+\titleformat{\section}
+  {\color{darkgreen}\large\bfseries}
+  {\thesection.}{0.5em}{}
+
+\titleformat{\subsection}
+  {\bfseries\normalsize}
+  {\thesubsection.}{0.5em}{}
+
+\titlespacing*{\section}{0pt}{0.5cm}{0.2cm}
+\titlespacing*{\subsection}{0pt}{0.25cm}{0.1cm}
+
+% Header / footer
+\usepackage{fancyhdr}
+\pagestyle{fancy}
+\fancyhf{}
+\fancyfoot[L]{\small Télécom Paris}
+\fancyfoot[C]{\thepage}
+\fancyfoot[R]{\small MS IA Expert Data \& MLOps}
+\renewcommand{\footrulewidth}{0.4pt}
+
+% Liens
+\usepackage[hidelinks]{hyperref}
+\usepackage{url}
+
+% Code
+\usepackage{listings}
+% \usepackage{inconsolata}  % paquet manquant sur cette machine ; sans incidence
+\lstset{
+  basicstyle=\ttfamily\footnotesize,
+  breaklines=true,
+  frame=single,
+  backgroundcolor=\color{gray!10}
+}
+
+% Encadrés
+\usepackage{tcolorbox}
+\tcbset{
+  colback=lightgreen,
+  colframe=lightgreen,
+  boxrule=0pt,
+  arc=2mm,
+  left=2mm,
+  right=2mm,
+  top=2mm,
+  bottom=2mm
+}
+
+% TikZ
+\usepackage{tikz}
+\usetikzlibrary{positioning,shapes.multipart,arrows.meta,calc,backgrounds}
+
+\tikzset{
+  lifeline/.style={densely dashed, thick},
+  actor/.style={font=\sffamily\bfseries},
+  msg/.style={-Latex, very thick},
+  note/.style={font=\ttfamily\small, align=left, fill=white, inner sep=1pt}
+}
+
+% Commandes perso
+\newcommand{\sautitemize}{\vspace*{0.3cm}\indent}
+\newcommand{\sautno}{\vspace*{0.3cm}\\}
+\newcommand{\saut}{\vspace*{0.3cm}\\\indent}
+\newcommand{\sautp}{\\\indent}
+\newcommand{\sautpp}{\\\noindent}
+
+\nocite{*}
+
+\begin{document}
+
+\begin{strip}
+
+\begin{center}
+
+% Logos commentés tant que les images ne sont pas dans report-v2/images/
+% \begin{minipage}{0.45\textwidth}
+% \flushleft
+% \includegraphics[width=0.45\linewidth]{images/Logo_TelecomParis.png}
+% \end{minipage}
+% \begin{minipage}{0.45\textwidth}
+% \flushright
+% \includegraphics[width=0.35\linewidth]{images/Logo_IMT.png}
+% \end{minipage}
+% \vspace{0.5cm}
+
+{\Large \textbf{IADATA708 - Machine learning équitable et interprétable}}\\[0.25cm]
+
+{\huge \bfseries \color{darkgreen} Fairness et interprétabilité sur Pokec }\\[0.4cm]
+\vspace{0.15cm}
+
+{\Large
+Julien LAFRANCE, Yassine MERNISSI, Grégoire PETIT, Benjamin LEPOURTOIS }\\[0.25cm]
+
+{\large
+Télécom Paris - MS IA Expert Data \& MLOps - Année universitaire 2025-2026
+}\\[0.4cm]
+
+\end{center}
+
+\begin{tcolorbox}
+\textbf{Résumé.} On entraîne un GNN sur Pokec, un graphe d'amitié d'un réseau social slovaque. La cible que l'on prédit est le tabagisme régulier et l'attribut sensible est l'âge. La baseline GraphSAGE \emph{amplifie} l'écart de tabagisme entre jeunes et adultes au-delà de la statistique réelle. On compare ensuite trois familles de méthodes d'équité (pré-, in-, post-traitement), une analyse d'interprétabilité, et un test de robustesse. Le résultat principal : la méthode la plus simple (Reweighting) corrige le mieux l'amplification, tandis que les méthodes plus sophistiquées soit dégradent fortement l'utilité, soit sur-corrigent en inventant la discrimination opposée.
+\end{tcolorbox}
+
+\vspace{0.05cm}
+\end{strip}
+
+%%%%%% _____ INTRODUCTION _____ %%%%%%%
+\section{Introduction}
+
+\subsection{Choix du dataset}
+
+On utilise le subset Pokec fourni par Dai \& Wang dans le papier \emph{FairGNN} (WSDM 2021). C'est l'un des seuls graphes sociaux réels avec un attribut sensible documenté qui tienne en mémoire et tourne en quelques minutes : 66\,569 nœuds (utilisateurs slovaques), $\approx$729\,k arêtes (amitiés réciproques), 264 features tabulaires (intérêts, langues, comportements, indicateurs de profil). Les auteurs FairGNN livrent deux subsets équivalents (\texttt{region\_job.csv} et \texttt{region\_job\_2.csv}, parfois étiquetés Pokec-z et Pokec-n selon les sources, le mapping étant ambigu). Nous utilisons \texttt{region\_job\_2.csv}.
+
+\subsection{Choix de la cible et de l'attribut sensible}
+
+C'est le point qui nous a pris le plus de temps. La cible présente dans la plupart des travaux antérieurs sur ce dataset, \texttt{completed\_level\_of\_education\_indicator}, n'est pas une variable éducative : elle vaut 1 dès qu'un utilisateur a coché un niveau d'études (primaire, lycée, université ou apprentissage). C'est donc un \emph{indicateur de complétude de profil}. Empiriquement, n'importe quelle colonne de remplissage donne $\Delta DP$ entre 40 et 60\,pp sur cette cible : 50\,pp pour ``parle anglais'', 42\,pp pour ``parle hongrois'', 61\,pp pour ``parle au moins une langue''. Ce qu'on mesure n'est donc pas une discrimination algorithmique, mais le biais de sélection entre utilisateurs qui remplissent leur profil et ceux qui ne le remplissent pas.
+
+\vspace*{0.15cm}
+On a donc cherché une cible plus défendable. Après avoir testé plusieurs combinaisons (niveau d'études $\geq$ lycée, vrai diplôme universitaire, axes ethniques re-extraits du SNAP brut), nous retenons \texttt{fajcim pravidelne} (fume régulièrement, prévalence 9{,}3\,\%) comme cible et \texttt{age\_old} (binaire : adulte/senior $\geq$ 25 ans vs jeune $<$ 25) comme attribut sensible. Ce choix peut sembler composite et discutable -- la cible est un comportement et l'axe sensible est l'âge, ce qui donne un cas spécifique. On le défend pour quatre raisons.
+
+\textbf{(i)} L'auto-déclaration du tabagisme est crédible : la cohabitation fumeur / non-fumeur est socialement visible, donc les utilisateurs mentent peu sur cette question (à comparer avec l'ethnie ou la religion, où le \emph{self-declaration bias} est massif).
+\textbf{(ii)} La cible n'est pas trivialement décodable d'autres features : on retire de \texttt{x} les quatre colonnes liées au tabac (\texttt{fajcim*}, \texttt{nefajcim}) avant l'entraînement.
+\textbf{(iii)} Sur les autres axes sensibles testés (\texttt{gender}, \texttt{region}, \texttt{hungarian}, \texttt{anglicky}, \texttt{nemecky}), le modèle reflète la distribution réelle sans la déformer (\texttt{excess\_gap}~$\approx$~0). C'est uniquement sur l'axe âge qu'apparaît une amplification statistiquement robuste.
+\textbf{(iv)} Le couple âge $\times$ tabac correspond à un cas pratique reconnu : la tarification d'assurance santé combine ces deux variables, donc une amplification algorithmique a un coût économique direct.
+
+\vspace*{0.15cm}
+La limite de ce choix : on ne mesure pas la fairness sur un attribut protégé classique (genre, origine), donc nos conclusions ne se généralisent pas mécaniquement. C'est un cas spécifique mais empiriquement signifiant. Le seul autre cas qui aurait été aussi signifiant est l'axe Roma re-extrait depuis SNAP, mais avec 0{,}33\,\% de prévalence (vs 8-10\,\% démographiques), la sous-déclaration rend toute conclusion fragile.
+
+%%%%%% _____ BASELINE _____ %%%%%%%
+\section{Baseline}
+
+\subsection{Choix du modèle}
+
+On prend GraphSAGE comme baseline. C'est un GNN à message passing assez standard : à chaque couche, chaque nœud agrège l'information de ses voisins (par moyenne ici) puis applique une transformation non linéaire. Au bout de deux couches, la représentation d'un utilisateur dépend des features de ses amis et des amis de ses amis.
+
+On a choisi GraphSAGE plutôt que GCN ou GAT pour deux raisons. \textbf{(1)} Sur Pokec, le graphe est sparse et hétérogène : GraphSAGE supporte l'inductivité (bien que pas exploitée ici) et accepte naturellement de l'agrégation par échantillonnage si on devait scaler. \textbf{(2)} La méthode de référence FairGNN, à laquelle on doit se comparer, utilise GraphSAGE comme encoder. Garder le même squelette permet une comparaison équitable.
+
+\textbf{Pourquoi un GNN ici plutôt qu'un MLP sur les features tabulaires ?} L'hypothèse est que le graphe contient de l'information utile via l'homophilie : les amis se ressemblent, donc l'agrégation des voisins enrichit la représentation. C'est aussi exactement le mécanisme par lequel un GNN peut amplifier le biais : si un attribut sensible est homophile (les jeunes sont surtout amis entre eux), le message passing renforce cette structure dans les embeddings. C'est pourquoi le GNN est le bon objet d'étude pour la fairness on graphs : un MLP ne peut pas amplifier comme ça.
+
+\textbf{Hyperparamètres :} 2 couches SAGE, hidden\_dim~=~256, dropout 0{,}5, lr~=~5e-3, optimiseur Adam, 200 epochs maximum avec early stopping (patience 30) sur la F1 de validation. Splits stratifiés sur (label $\times$ âge) en 60/20/20, seed~=~42.
+
+\subsection{Résultats}
+
+Sur le test set ($n$~=~13\,314, dont 4\,050 adultes/seniors et 9\,264 jeunes), on obtient les chiffres suivants.
+
+\begin{table}[H]
+\centering
+\footnotesize
+\begin{tabular}{lr}
+\toprule
+Métrique & Valeur \\
+\midrule
+Macro F1 & 0{,}632 \\
+Accuracy & 0{,}886 \\
+Vrai taux fumeurs jeunes ($<$25) & 8{,}12\,\% \\
+Vrai taux fumeurs adultes ($\geq$25) & 12{,}18\,\% \\
+\textbf{Vrai écart} (adultes - jeunes) & \textbf{+4{,}10\,pp} \\
+Taux prédit fumeurs jeunes & 5{,}21\,\% \\
+Taux prédit fumeurs adultes & 12{,}87\,\% \\
+\textbf{Écart prédit} & \textbf{+7{,}65\,pp} \\
+\textbf{Excess gap} (prédit - vrai) & \textbf{+3{,}56\,pp} \\
+$\Delta$DP (Demographic Parity) & 0{,}076 \\
+$\Delta$EO (Equal Opportunity) & 0{,}154 \\
+\bottomrule
+\end{tabular}
+\caption{Baseline GraphSAGE -- cible \texttt{fajcim pravidelne}, sensible \texttt{age\_old}.}
+\end{table}
+
+\textbf{Lecture humaine de ces chiffres.} Le modèle a une bonne accuracy (89\,\%), mais une F1 macro autour de 0{,}63 parce que la classe ``fumeur'' est minoritaire (9\,\% vs 91\,\%) et plus difficile à prédire que la classe majoritaire. Sur les écarts : la \emph{vraie} disparité de tabagisme entre adultes et jeunes dans le dataset est d'un peu plus de 4 points (12\,\% contre 8\,\%). C'est un fait. Le modèle, lui, prédit cet écart à 7{,}6 points, soit presque le double. La différence (+3{,}56\,pp) est ce qu'on appelle l'\texttt{excess\_gap} : c'est l'écart que le modèle invente au-delà de la statistique réelle. Avec $n$~=~4\,050 adultes dans le test set, l'intervalle de confiance à 95\,\% sur cet excess est de l'ordre de $\pm 1$\,pp. L'amplification est donc statistiquement robuste, pas un effet de seed.
+
+\textbf{Pourquoi cet excess existe-t-il ?} L'hypothèse est que le graphe encode une homophilie générationnelle : le coefficient d'assortativité de Newman sur \texttt{age\_old} vaut 0{,}35, donc les jeunes sont préférentiellement amis avec des jeunes. Le message passing renforce cette structure et le modèle apprend des associations indirectes ``adulte $\leftrightarrow$ tabac'' plus fortes que les associations directes dans les features. La section sur l'interprétabilité revient sur ce mécanisme.
+
+%%%%%% _____ FAIRNESS _____ %%%%%%%
+\section{Méthodes d'équité}
+
+On compare une méthode dans chaque famille (pré-traitement, in-training, post-traitement). On garde des méthodes qui restent compatibles avec le pipeline GraphSAGE pour pouvoir attribuer les écarts à la méthode et non à un changement d'architecture.
+
+\subsection{Pré-traitement : Resampling, Reweighting, FairDrop}
+
+\textbf{Resampling} (oversample). On ré-échantillonne le set d'entraînement pour égaliser les cellules ($y \times s$). Intuition : si les fumeurs adultes sont rares relativement aux non-fumeurs jeunes, on les recopie pour rééquilibrer. C'est la méthode la plus naïve. Sur notre cas, elle ne change rien : F1 et excess identiques au baseline. Le modèle réapprend les mêmes corrélations, juste avec plus d'exemples sur certaines cellules.
+
+\textbf{Reweighting} (Kamiran \& Calders, 2012). On pondère chaque exemple d'entraînement par $w_i = \frac{P(s)\,P(y)}{P(s,y)}$, ce qui revient à corriger la corrélation entre $y$ et $s$ au niveau de la fonction de coût. Si les adultes-fumeurs sont sur-représentés dans les données, leur poids dans la loss diminue. Le modèle ne voit pas le rééquilibrage explicitement (on n'a pas dupliqué d'exemples), mais la loss le pousse à ne pas optimiser sur ce qui corrèle âge et tabac. Sur notre cas, l'excess passe de $+3{,}56$ à $+0{,}60$\,pp avec une F1 quasiment inchangée (0{,}634). C'est gratuit et efficace.
+
+\textbf{FairDrop} (Spinelli et al., 2021). On retire aléatoirement une fraction des arêtes intra-groupe (ami-ami du même âge) pour casser l'homophilie générationnelle dans le graphe. Intuition : si l'amplification vient de l'agrégation entre adultes-fumeurs voisins, en retirant ces arêtes on devrait réduire l'effet. En pratique, l'effet est marginal sur notre cas : excess passe de $+3{,}56$ à $+3{,}13$\,pp. Le signal qui amplifie n'est pas seulement local-graphe : il vient aussi des features tabulaires elles-mêmes, donc casser le graphe ne suffit pas.
+
+\textbf{Limite générale du pré-traitement.} Toutes ces méthodes modifient les inputs avant le modèle ; elles ne peuvent pas garantir que le modèle ne va pas re-créer les corrélations supprimées via d'autres features (proxies). Reweighting marche ici parce que la corrélation âge-tabac est en grande partie capturable par des marqueurs sociaux (\emph{lycée terminé}, \emph{boit en société}, \emph{a une vie sexuelle}), et l'ajustement des poids suffit à éviter l'amplification. Sur d'autres datasets où les proxies seraient plus subtils, le Reweighting peut être contourné.
+
+\subsection{In-training : FairGNN}
+
+FairGNN (Dai \& Wang, 2021) est la méthode in-training de référence pour les GNN. L'idée vient du domaine adversarial : on entraîne le GNN à prédire $y$, et en parallèle un classifieur adversaire essaie de prédire l'attribut sensible $s$ depuis les embeddings. Le GNN cherche à \emph{tromper} l'adversaire, donc à produire des embeddings où $s$ n'est plus prédictible. Concrètement on utilise un \emph{Gradient Reversal Layer} (GRL) : sur la passe arrière, le gradient de la loss adversariale est multiplié par $-\lambda$ avant d'arriver à l'encoder, ce qui inverse l'objectif (l'encoder veut maximiser l'erreur de l'adversaire au lieu de la minimiser). Le coefficient $\lambda$ règle le compromis fairness vs utilité.
+
+\textbf{Résultat sur notre cas (meilleur $\lambda$~=~1{,}0).} L'excess passe de $+3{,}56$ à $+0{,}09$\,pp -- quasi-parfait. Mais la F1 chute de 0{,}632 à 0{,}560, soit $-7$\,pp d'utilité ($-11$\,\% relatif). Le ratio gain/coût est défavorable : on gagne 0{,}07\,pp de plus que Reweighting au prix de 7\,pp de F1.
+
+\textbf{Pourquoi un tel coût ?} L'âge est non seulement un attribut sensible, mais aussi un signal authentiquement prédictif du tabagisme (les jeunes fument vraiment moins que les adultes dans le dataset). Quand on demande à l'encoder de produire des embeddings où l'âge n'est pas extractible, on lui demande d'oublier en partie un signal utile pour la prédiction. C'est la limite intrinsèque des méthodes adversariales : elles n'ont pas de manière de distinguer ``signal sensible qui amplifie un biais injuste'' de ``signal sensible qui est une vraie covariable''. Elles suppriment les deux.
+
+\textbf{Stabilité.} Les méthodes adversariales sont aussi connues pour être instables au cours de l'entraînement. On a observé pour $\lambda$ trop grand ($\lambda$~=~5{,}0) un effondrement où le modèle prédit la même classe pour tout le monde (F1~=~0{,}48, signature classique). Notre grille $\lambda \in \{0{,}1; 0{,}5; 1{,}0; 5{,}0\}$ avec sélection sur la F1 de validation évite ce piège, mais c'est une fragilité réelle.
+
+\subsection{Post-traitement : INLP}
+
+INLP (\emph{Iterative Nullspace Projection}, Ravfogel et al., 2020) est une méthode post-hoc qui agit sur les embeddings après l'entraînement. L'intuition repose sur l'algèbre linéaire. On part des embeddings produits par le GraphSAGE entraîné. On entraîne un classifieur linéaire (régression logistique) qui essaie de prédire $s$ à partir des embeddings. Si ce classifieur a une accuracy au-dessus du chance level, c'est qu'il existe une direction $\mathbf{w}$ dans l'espace d'embeddings le long de laquelle l'attribut sensible se lit. INLP \emph{projette} les embeddings sur l'orthogonal de cette direction, ce qui supprime cette information par construction. On répète l'opération jusqu'à ce que plus aucun classifieur linéaire ne puisse battre le chance level.
+
+\textbf{Pourquoi ça marche.} Après INLP, par construction, aucun classifieur linéaire ne peut récupérer $s$ depuis les embeddings projetés. C'est une garantie \emph{formelle} (au sens linéaire) plus forte que celle de FairGNN, qui ne garantit l'invariance que vis-à-vis du MLP adversaire spécifique entraîné.
+
+\textbf{Résultat sur notre cas.} Le leakage AUC passe de 0{,}90 à 0{,}67 (le classifieur peut encore récupérer un peu d'information mais beaucoup moins). L'excess passe à $-2{,}10$\,pp : le modèle ne sur-prédit plus le tabac chez les adultes, il \emph{sous-prédit} maintenant. La F1 chute à 0{,}590.
+
+\textbf{Pourquoi la sur-correction.} INLP supprime la direction d'embedding qui encode l'âge le plus directement. Mais cette direction porte aussi du signal causal vers le tabagisme. Le modèle se retrouve à utiliser uniquement les features tabulaires brutes, sans pouvoir mobiliser l'agrégation graphe sur l'axe âge. Comme le baseline avait \emph{trop} amplifié, supprimer cette amplification le fait basculer de l'autre côté : il sous-estime maintenant le gap.
+
+\textbf{Limite générale du post-traitement.} INLP nettoie ce que le modèle a déjà appris. Si la représentation encode très fortement l'attribut sensible (ce qui est le cas ici, leakage initial à 0{,}90), la projection enlève une grande partie du signal utile en même temps que le sensible. Plus le baseline est ``sale'', plus le post-process abîme l'utilité.
+
+\subsection{Synthèse}
+
+\begin{table}[H]
+\centering
+\footnotesize
+\begin{tabular}{lcccc}
+\toprule
+Méthode & F1 & $\Delta$DP & excess & Régime \\
+\midrule
+Baseline GraphSAGE & 0{,}632 & 0{,}076 & $+3{,}56$ & amplifie \\
++ Resampling & 0{,}632 & 0{,}076 & $+3{,}56$ & inactif \\
++ FairDrop & 0{,}641 & 0{,}072 & $+3{,}13$ & marginal \\
+\textbf{+ Reweighting} & \textbf{0{,}634} & \textbf{0{,}047} & $\mathbf{+0{,}60}$ & \textbf{fidèle} \\
+FairGNN ($\lambda$=1) & 0{,}560 & 0{,}042 & $+0{,}09$ & coût F1 \\
++ INLP & 0{,}590 & 0{,}020 & $-2{,}10$ & sur-corrige \\
+\bottomrule
+\end{tabular}
+\caption{Comparaison des méthodes d'équité. \emph{excess} en points de pourcentage (vrai écart = $+4{,}10$\,pp).}
+\end{table}
+
+Lecture humaine : le baseline amplifie. Le Resampling ne fait rien. FairDrop fait peu. Le Reweighting réduit l'amplification sans coût d'utilité. FairGNN va presque parfaitement à l'objectif fairness mais détruit du signal utile. INLP retire le signal sensible et bascule en sous-correction. La méthode la plus simple gagne.
+
+%%%%%% _____ INTERPRETABILITY _____ %%%%%%%
+\section{Interprétabilité}
+
+\subsection{Choix de l'outil}
+
+On veut comprendre \emph{pourquoi} le baseline amplifie. La question n'est pas ``quelle feature explique une prédiction donnée'' (ce qui justifierait SHAP ou GNNExplainer), mais ``quelles features sont simultanément prédictives du tabac \emph{et} corrélées à l'âge''. C'est cette combinaison qui crée mécaniquement l'amplification : si le modèle s'appuie sur des marqueurs sociaux qui covarient avec l'âge, il infère ``adulte $\rightarrow$ profil $X$ $\rightarrow$ tabac'' au-delà de la statistique brute.
+
+L'outil est donc simple. On entraîne une régression logistique balancée sur les 264 features pour prédire le tabagisme, on extrait les coefficients $|w_i|$ classés par magnitude, et on calcule pour chaque top-feature la corrélation de Pearson avec \texttt{age\_old}. Une feature à fort coefficient \emph{et} fortement corrélée à l'âge est un médiateur pro-amplification. Pour un modèle linéaire, les coefficients sont strictement équivalents aux SHAP values (à un facteur d'échelle près), donc on a la même information sans la complexité.
+
+GNNExplainer (Ying et al., 2019) et un outil de feature importance par permutation sont aussi disponibles dans le repo. On ne les utilise pas ici parce que GNNExplainer cherche à expliquer une décision \emph{individuelle} (quel sous-graphe a influencé la prédiction du nœud~$i$), alors qu'on cherche à expliquer un biais \emph{agrégé}.
+
+\subsection{Findings}
+
+\begin{table}[H]
+\centering
+\footnotesize
+\begin{tabular}{lrr}
+\toprule
+Top feature & coef & corr(âge) \\
+\midrule
+\texttt{pijem prilezitostne} (boit) & $+0{,}23$ & $+0{,}08$ \\
+\texttt{stredoskolske} (lycée terminé) & $+0{,}14$ & $+0{,}14$ \\
+\texttt{sex} (vie sexuelle déclarée) & $+0{,}14$ & $+0{,}07$ \\
+\texttt{rap} & $+0{,}14$ & $-0{,}13$ \\
+\texttt{anglicky} (parle anglais) & $-0{,}12$ & $-0{,}16$ \\
+\texttt{sportovanie} (fait du sport) & $-0{,}17$ & $-0{,}07$ \\
+\bottomrule
+\end{tabular}
+\caption{Top features prédictives du tabagisme et leur corrélation avec l'âge.}
+\end{table}
+
+Trois features composent l'\textbf{axe pro-amplification} (coefficient positif et corrélation positive avec l'âge) : avoir terminé son lycée, boire occasionnellement, déclarer une vie sexuelle. Mécaniquement, le modèle apprend que ``adulte = a fini le lycée + boit en société + sexuellement actif'', et ces marqueurs sont effectivement corrélés positivement au tabagisme dans nos données. Le GraphSAGE renforce ce lien latent via le message passing, ce qui produit les 3{,}6\,pp d'amplification observés.
+
+Aucune de ces covariables n'est un ``biais inacceptable'' individuellement : ce sont des covariables sociologiques légitimes. Mais leur composition produit l'effet de groupe qui dépasse la statistique réelle. C'est cette composition qu'une méthode comme Reweighting parvient à neutraliser sans toucher aux features individuelles.
+
+%%%%%% _____ ROBUSTNESS _____ %%%%%%%
+\section{Robustesse}
+
+\subsection{Choix de l'outil}
+
+On teste deux perturbations contrôlées qui correspondent à des dégradations réalistes du dataset : du bruit gaussien $\mathcal{N}(0, \sigma^2)$ ajouté aux features standardisées, et un \emph{edge dropping} aléatoire qui retire une fraction $r$ des arêtes du graphe. Le bruit teste la robustesse aux features manquantes ou imprécises (cas réaliste pour des profils auto-déclarés). Le drop d'arêtes teste la robustesse à un sous-échantillonnage du graphe ou à des amitiés non observées.
+
+\subsection{Résultats}
+
+Sur la baseline GraphSAGE, la F1 reste stable jusqu'à $\sigma$~=~0{,}3 (chute $<$ 0{,}5\,pp) et jusqu'à un drop de 30\,\% des arêtes (chute $<$ 1\,pp). Au-delà ($\sigma$~$>$~0{,}5 ou drop~$>$~50\,\%), la F1 chute brutalement. Ces seuils restent stables après application de Reweighting, parce que cette méthode ne modifie ni les features ni le graphe.
+
+C'est un avantage non trivial du pré-traitement par poids : il préserve la robustesse. À l'inverse, FairGNN modifie l'encoder pendant l'entraînement et peut dégrader sa robustesse de façon imprévue (effet documenté dans la littérature adversariale).
+
+%%%%%% _____ CONCLUSION _____ %%%%%%%
+\section{Conclusion et discussion}
+
+\subsection{Ce qu'on a appris}
+
+Sur Pokec avec la cible \emph{tabagisme régulier} et l'attribut sensible \emph{âge}, le baseline GraphSAGE amplifie effectivement la disparité au-delà de la statistique réelle ($+3{,}56$\,pp d'excès, statistiquement robuste). C'est le seul cas d'amplification authentique qu'on ait identifié dans le dataset après audit -- ce qui est en soi un résultat : la majorité des configurations cible $\times$ attribut sensible sur Pokec produisent du $\Delta$DP qui reflète en réalité du selection bias et non un biais algorithmique.
+
+Sur ce cas, la méthode qui domine est aussi la plus simple : le Reweighting de Kamiran-Calders, antérieur de 9 ans à FairGNN. Il neutralise l'amplification ($+0{,}60$\,pp d'excès résiduel) sans coût d'utilité (F1 stable), simplement en pondérant les exemples d'entraînement. Les méthodes plus sophistiquées paient soit en F1 (FairGNN, $-7$\,pp), soit en sur-correction (INLP, excès qui devient $-2{,}10$\,pp, le modèle prédit \emph{moins} de tabagisme adulte que la réalité).
+
+\subsection{Limites}
+
+Le dataset Pokec est biaisé : 41\,\% des utilisateurs ont moins de 25 ans (le 25e percentile est à 8 ans, donc beaucoup d'enfants), seulement 4{,}8\,\% ont 40 ans et plus. Les ``seniors'' qu'on mesure sont des seniors atypiques d'un réseau social pour adolescents. Toute conclusion sur l'âge est donc spécifique à cette population. Par ailleurs, le ``vrai écart'' qu'on utilise comme référence est lui-même celui du dataset, qui peut être biaisé par les pratiques de remplissage. On compare le modèle à la statistique du dataset, pas à la vérité épidémiologique slovaque.
+
+Enfin, choisir une métrique de fairness, c'est choisir une éthique. Le théorème d'incompatibilité de Chouldechova et Kleinberg (2017) montre qu'on ne peut pas avoir simultanément $\Delta$DP~=~0, $\Delta$EO~=~0 et la calibration par groupe (sauf cas trivial). Notre choix de cibler l'\emph{excess gap} reflète une éthique de ``ne pas amplifier au-delà du réel'', qui n'est pas neutre.
+
+\subsection{Reproductibilité et utilisation de l'IA}
+
+Le projet est restructuré autour d'un notebook principal (\texttt{notebooks/main\_experiment.ipynb}) qui exécute toute la chaîne de bout en bout sur GPU en moins de 5 minutes. Les helpers principaux sont dans \texttt{src/} (loader Pokec, splits, métriques fairness, GraphSAGE, Reweighting, INLP). Le code est entièrement en \texttt{polars} (pas de \texttt{pandas}), vectorisé, testé via 50+ tests pytest et linté avec \texttt{ruff}.
+
+Nous avons utilisé Claude Opus 4.7 comme assistant pour la migration pandas $\rightarrow$ polars, l'intégration des modules INLP et Reweighting, le portage de FairGNN (GRL), et la rédaction de ce rapport. Tout le code a été relu, testé et exécuté par les auteurs ; toutes les décisions méthodologiques (choix de cible, choix d'attribut sensible, choix d'\texttt{excess\_gap} comme métrique principale, simplification finale du pipeline) ont été prises par les auteurs.
+
+\end{document}
